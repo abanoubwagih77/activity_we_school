@@ -9,12 +9,14 @@ interface QuestionBoxesGameProps {
   questions: Question[];
   boxBehavior?: BoxBehavior;
   onAwardPoints: (points: number, isCorrect: boolean) => void;
+  timerDuration?: number;
 }
 
 export const QuestionBoxesGame: React.FC<QuestionBoxesGameProps> = ({
   questions,
   boxBehavior = 'dimmed',
   onAwardPoints,
+  timerDuration = 20,
 }) => {
   const [activeQuestionIndex, setActiveQuestionIndex] = useState<number | null>(null);
   const [usedBoxIndices, setUsedBoxIndices] = useState<Set<number>>(new Set());
@@ -35,12 +37,14 @@ export const QuestionBoxesGame: React.FC<QuestionBoxesGameProps> = ({
   const handleSelectAnswer = (option: string) => {
     if (!currentQuestion || activeQuestionIndex === null) return;
     setSelectedAnswer(option);
-    const isCorrect = option === currentQuestion.correctAnswer;
+    const isCorrect = option !== '' && option !== '__TIME_UP__' && option === currentQuestion.correctAnswer;
     if (isCorrect) {
       soundEngine.playCorrect();
       onAwardPoints(currentQuestion.points, true);
     } else {
-      soundEngine.playWrong();
+      if (option !== '__TIME_UP__') {
+        soundEngine.playWrong();
+      }
       onAwardPoints(0, false);
     }
     setUsedBoxIndices(prev => new Set([...prev, activeQuestionIndex]));
@@ -173,6 +177,8 @@ export const QuestionBoxesGame: React.FC<QuestionBoxesGameProps> = ({
             selectedAnswer={selectedAnswer}
             isAnswerRevealed={isRevealed}
             onSelectAnswer={handleSelectAnswer}
+            timerDuration={timerDuration}
+            onTimeUp={handleBackToGrid}
           />
         </motion.div>
       )}

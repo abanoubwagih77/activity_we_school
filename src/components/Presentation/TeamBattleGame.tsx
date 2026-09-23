@@ -14,6 +14,7 @@ interface TeamBattleGameProps {
   onUpdateTeamScore: (teamId: string, delta: number) => void;
   onSetTeamScore: (teamId: string, newScore: number) => void;
   onFinish: () => void;
+  timerDuration?: number;
 }
 
 export const TeamBattleGame: React.FC<TeamBattleGameProps> = ({
@@ -22,6 +23,7 @@ export const TeamBattleGame: React.FC<TeamBattleGameProps> = ({
   onUpdateTeamScore,
   onSetTeamScore,
   onFinish,
+  timerDuration = 20,
 }) => {
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
@@ -46,11 +48,13 @@ export const TeamBattleGame: React.FC<TeamBattleGameProps> = ({
   const handleSelectAnswer = (option: string) => {
     if (!currentQuestion) return;
     setSelectedAnswer(option);
-    const isCorrect = option === currentQuestion.correctAnswer;
+    const isCorrect = option !== '' && option !== '__TIME_UP__' && option === currentQuestion.correctAnswer;
     if (isCorrect) {
       soundEngine.playCorrect();
     } else {
-      soundEngine.playWrong();
+      if (option !== '__TIME_UP__') {
+        soundEngine.playWrong();
+      }
     }
   };
 
@@ -201,6 +205,8 @@ export const TeamBattleGame: React.FC<TeamBattleGameProps> = ({
           selectedAnswer={selectedAnswer}
           isAnswerRevealed={isRevealed}
           onSelectAnswer={handleSelectAnswer}
+          timerDuration={timerDuration}
+          onTimeUp={handleNext}
         />
       )}
     </div>

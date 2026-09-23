@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Question } from '../../types';
-import { CheckCircle2, XCircle, Code2, Image as ImageIcon, Lightbulb, HelpCircle, Eye } from 'lucide-react';
+import { CheckCircle2, XCircle, Code2, Lightbulb, Clock, Pause, Play, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { soundEngine } from '../../utils/audio';
 
 interface QuestionDisplayProps {
   question: Question;
@@ -9,6 +10,11 @@ interface QuestionDisplayProps {
   isAnswerRevealed: boolean;
   onSelectAnswer: (option: string) => void;
   disabled?: boolean;
+  showTimer?: boolean;
+  timerDuration?: number;
+  onTimeUp?: () => void;
+  autoHideOnTimeUp?: boolean;
+  autoHideDelayMs?: number;
 }
 
 export const QuestionDisplay: React.FC<QuestionDisplayProps> = ({
@@ -17,10 +23,95 @@ export const QuestionDisplay: React.FC<QuestionDisplayProps> = ({
   isAnswerRevealed,
   onSelectAnswer,
   disabled = false,
+  showTimer = true,
+  timerDuration = 20,
+  onTimeUp,
+  autoHideOnTimeUp = true,
+  autoHideDelayMs = 2000,
 }) => {
   const [completeInput, setCompleteInput] = useState('');
-  const isAnswered = selectedAnswer !== null || isAnswerRevealed;
-  const isCorrect = selectedAnswer?.trim().toLowerCase() === question.correctAnswer?.trim().toLowerCase();
+  const totalSeconds = question.timeLimit || timerDuration || 20;
+
+  // Timer states
+  const [timeLeft, setTimeLeft] = useState<number>(totalSeconds);
+  const [isPaused, setIsPaused] = useState<boolean>(false);
+  const [isTimeExpired, setIsTimeExpired] = useState<boolean>(false);
+
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const autoHideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const isAnswered = selectedAnswer !== null || isAnswerRevealed || isTimeExpired;
+  const isCorrect = 
+    Boolean(selectedAnswer) && 
+    selectedAnswer !== '__TIME_UP__' && 
+    selectedAnswer?.trim().toLowerCase() === question.correctAnswer?.trim().toLowerCase();
+
+  // Reset timer on question change
+  useEffect(() => {
+    const duration = question.timeLimit || timerDuration || 20;
+    setTimeLeft(duration);
+    setIsPaused(false);
+    setIsTimeExpired(false);
+    setCompleteInput('');
+
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    if (autoHideTimeoutRef.current) clearTimeout(autoHideTimeoutRef.current);
+  }, [question.id, question.timeLimit, timerDuration]);
+
+  // Countdown timer loop
+  useEffect(() => {
+    if (!showTimer) return;
+    if (isAnswered || isPaused || isTimeExpired) {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      return;
+    }
+
+    intervalRef.current = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          if (intervalRef.current) clearInterval(intervalRef.current);
+          setIsTimeExpired(true);
+          soundEngine.playTimesUp();
+
+          // Mark as wrong answer
+          onSelectAnswer('__TIME_UP__');
+
+          // Auto-hide and return after brief feedback delay
+          if (onTimeUp && autoHideOnTimeUp) {
+            autoHideTimeoutRef.current = setTimeout(() => {
+              onTimeUp();
+            }, autoHideDelayMs);
+          }
+
+          return 0;
+        }
+
+        // Auditory tension tick in final 5 seconds
+        if (prev <= 6) {
+          soundEngine.playTick(850);
+        }
+
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [showTimer, isAnswered, isPaused, isTimeExpired, onSelectAnswer, onTimeUp, autoHideOnTimeUp, autoHideDelayMs]);
+
+  // Clean up timers on unmount
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (autoHideTimeoutRef.current) clearTimeout(autoHideTimeoutRef.current);
+    };
+  }, []);
+
+  const handleManualDismiss = () => {
+    if (autoHideTimeoutRef.current) clearTimeout(autoHideTimeoutRef.current);
+    if (onTimeUp) onTimeUp();
+  };
 
   const getOptionLetter = (index: number) => {
     return String.fromCharCode(65 + index); // A, B, C, D
@@ -32,13 +123,18 @@ export const QuestionDisplay: React.FC<QuestionDisplayProps> = ({
     onSelectAnswer(completeInput.trim());
   };
 
+  // Timer visual percentages & urgency
+  const timerPercent = Math.max(0, Math.min(100, (timeLeft / totalSeconds) * 100));
+  const isUrgent = timeLeft <= 5 && timeLeft > 0;
+  const isWarning = timeLeft <= 10 && timeLeft > 5;
+
   return (
-    <div className="w-full max-w-5xl mx-auto flex flex-col gap-6" dir="ltr">
-      {/* Question Header & Category Badge */}
+    <div className="w-full max-w-5xl mx-auto flex flex-col gap-5" dir="ltr">
+      {/* Top Question Category & Points Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <span className="px-3.5 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200">
-            {question.category || 'Computer Science'}
+            {question.category || 'General'}
           </span>
           <span className="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-slate-100 text-slate-700 border border-slate-200">
             {question.type.replace('_', ' ')}
@@ -59,6 +155,125 @@ export const QuestionDisplay: React.FC<QuestionDisplayProps> = ({
           </span>
         </div>
       </div>
+
+      {/* QUESTION COUNTDOWN TIMER & PROGRESS BAR */}
+      {showTimer && (
+        <div 
+          className={`w-full rounded-2xl p-4 border transition-all duration-300 shadow-sm ${
+            isTimeExpired
+              ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-300 dark:border-rose-900 ring-2 ring-rose-500/20'
+              : isUrgent
+              ? 'bg-rose-50/60 dark:bg-rose-950/30 border-rose-300 dark:border-rose-800 ring-2 ring-rose-500/30'
+              : isWarning
+              ? 'bg-amber-50/60 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800'
+              : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
+          }`}
+          dir="rtl"
+        >
+          <div className="flex items-center justify-between gap-3 mb-2.5">
+            {/* Clock icon & descriptive label */}
+            <div className="flex items-center gap-2.5">
+              <div className={`p-2 rounded-xl transition-all ${
+                isTimeExpired
+                  ? 'bg-rose-600 text-white shadow-md'
+                  : isUrgent
+                  ? 'bg-rose-500 text-white animate-bounce shadow-md'
+                  : isWarning
+                  ? 'bg-amber-500 text-white'
+                  : 'bg-purple-100 text-[#5B2D82] dark:bg-purple-950 dark:text-purple-300'
+              }`}>
+                <Clock className="w-5 h-5" />
+              </div>
+              <div>
+                <span className="text-[11px] font-bold text-slate-400 block">
+                  {isTimeExpired ? 'انتهت المهلة' : 'المهلة الزمنية للإجابة'}
+                </span>
+                <span className="text-xs sm:text-sm font-black text-slate-800 dark:text-slate-200">
+                  {isTimeExpired 
+                    ? 'انتهى الوقت المحدد للسؤال!' 
+                    : isPaused 
+                    ? 'العداد متوقف مؤقتاً' 
+                    : isAnswered 
+                    ? 'تم تسجيل الإجابة' 
+                    : 'أجب قبل انتهاء الوقت!'}
+                </span>
+              </div>
+            </div>
+
+            {/* Digits & Pause/Play toggle */}
+            <div className="flex items-center gap-2.5">
+              {!isAnswered && !isTimeExpired && (
+                <button
+                  type="button"
+                  onClick={() => setIsPaused(p => !p)}
+                  className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white cursor-pointer transition-colors"
+                  title={isPaused ? 'استئناف الوقت' : 'إيقاف مؤقت'}
+                >
+                  {isPaused ? <Play className="w-4 h-4 fill-current" /> : <Pause className="w-4 h-4" />}
+                </button>
+              )}
+
+              {/* Big Digital Countdown Badge */}
+              <div 
+                className={`px-4 py-1.5 rounded-xl font-mono font-black text-2xl md:text-3xl flex items-center gap-1.5 border-2 transition-all ${
+                  isTimeExpired
+                    ? 'bg-rose-600 text-white border-rose-700 shadow-lg animate-pulse'
+                    : isUrgent
+                    ? 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border-rose-400 scale-105 shadow-md ring-2 ring-rose-500/40'
+                    : isWarning
+                    ? 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-400'
+                    : 'bg-purple-50 dark:bg-purple-950/60 text-[#5B2D82] dark:text-purple-300 border-purple-200 dark:border-purple-800'
+                }`}
+                dir="ltr"
+              >
+                <span>{timeLeft}</span>
+                <span className="text-xs font-sans font-bold">s</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Smooth Shrinking Progress Bar */}
+          <div className="w-full h-3 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden p-0.5 border border-slate-200/60 dark:border-slate-700/60">
+            <div
+              className={`h-full rounded-full transition-all duration-1000 ease-linear ${
+                isTimeExpired
+                  ? 'bg-rose-600'
+                  : isUrgent
+                  ? 'bg-gradient-to-r from-rose-600 to-red-500 shadow-sm shadow-rose-500/50'
+                  : isWarning
+                  ? 'bg-gradient-to-r from-amber-500 to-orange-500'
+                  : 'bg-gradient-to-r from-[#5B2D82] via-purple-600 to-indigo-600'
+              }`}
+              style={{ width: `${timerPercent}%` }}
+            />
+          </div>
+
+          {/* Time Expired Notice & Instant Dismissal */}
+          {isTimeExpired && (
+            <motion.div
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mt-3 p-3 bg-rose-600 text-white rounded-xl flex items-center justify-between gap-3 shadow-md"
+            >
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 shrink-0 animate-bounce" />
+                <span className="font-extrabold text-xs sm:text-sm">
+                  انتهى الوقت! تم احتساب السؤال كإجابة غير صحيحة.
+                </span>
+              </div>
+              {onTimeUp && (
+                <button
+                  type="button"
+                  onClick={handleManualDismiss}
+                  className="px-3.5 py-1.5 rounded-lg bg-white text-rose-700 hover:bg-rose-50 text-xs font-black shrink-0 cursor-pointer shadow transition-all"
+                >
+                  إغلاق السؤال الآن
+                </button>
+              )}
+            </motion.div>
+          )}
+        </div>
+      )}
 
       {/* Main Question Text - High Contrast for Projector */}
       <div className="p-6 md:p-8 rounded-3xl bg-white border border-slate-200 shadow-sm text-left">
@@ -243,7 +458,11 @@ export const QuestionDisplay: React.FC<QuestionDisplayProps> = ({
               <div className="flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <h4 className="text-lg md:text-xl font-black">
-                    {isCorrect ? 'Awesome! Correct Answer!' : 'Correct Answer:'}
+                    {isCorrect 
+                      ? 'إجابة صحيحة وممتازة! 🎉' 
+                      : selectedAnswer === '__TIME_UP__'
+                      ? 'انتهى الوقت! الإجابة الصحيحة كانت:'
+                      : 'الإجابة الصحيحة:'}
                   </h4>
                   <span className="font-mono px-3.5 py-1 rounded-xl bg-white text-emerald-700 border border-emerald-300 text-base font-black shadow-sm">
                     {question.correctAnswer}
@@ -251,7 +470,7 @@ export const QuestionDisplay: React.FC<QuestionDisplayProps> = ({
                 </div>
                 {question.explanation && (
                   <div className="mt-3 text-base text-slate-700 leading-relaxed">
-                    <strong className="text-slate-900 block mb-1">Teaching Explanation:</strong>
+                    <strong className="text-slate-900 block mb-1">شرح تعليمي / توضيح:</strong>
                     {question.explanation}
                   </div>
                 )}

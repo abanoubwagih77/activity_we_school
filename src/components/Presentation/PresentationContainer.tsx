@@ -236,6 +236,7 @@ export const PresentationContainer: React.FC = () => {
             preventRepeats={activeActivity.preventQuestionRepeats}
             labelType={activeActivity.wheelLabelType}
             onAwardPoints={handleAwardPoints}
+            timerDuration={activeActivity.timerDuration || settings?.defaultTimerSeconds || 20}
           />
         )}
 
@@ -244,6 +245,7 @@ export const PresentationContainer: React.FC = () => {
             questions={activityQuestions}
             boxBehavior={activeActivity.boxBehavior}
             onAwardPoints={handleAwardPoints}
+            timerDuration={activeActivity.timerDuration || settings?.defaultTimerSeconds || 20}
           />
         )}
 
@@ -259,13 +261,14 @@ export const PresentationContainer: React.FC = () => {
             questions={activityQuestions}
             onAwardPoints={handleAwardPoints}
             onFinish={handleFinishActivity}
+            timerDuration={activeActivity.timerDuration || settings?.defaultTimerSeconds || 20}
           />
         )}
 
         {activeActivity.type === 'speed_quiz' && (
           <SpeedQuizGame
             questions={activityQuestions}
-            timerDurationSeconds={activeActivity.timerDuration || 15}
+            timerDurationSeconds={activeActivity.timerDuration || settings?.defaultTimerSeconds || 15}
             onAwardPoints={handleAwardPoints}
             onFinish={handleFinishActivity}
           />
@@ -294,6 +297,7 @@ export const PresentationContainer: React.FC = () => {
             onUpdateTeamScore={handleUpdateTeamScore}
             onSetTeamScore={handleSetTeamScore}
             onFinish={handleFinishActivity}
+            timerDuration={activeActivity.timerDuration || settings?.defaultTimerSeconds || 20}
           />
         )}
 
@@ -303,6 +307,7 @@ export const PresentationContainer: React.FC = () => {
             teams={activeActivity.scoreMode === 'team' ? teams : undefined}
             onAwardPoints={handleAwardPoints}
             onUpdateTeamScore={handleUpdateTeamScore}
+            timerDuration={activeActivity.timerDuration || settings?.defaultTimerSeconds || 20}
           />
         )}
       </main>

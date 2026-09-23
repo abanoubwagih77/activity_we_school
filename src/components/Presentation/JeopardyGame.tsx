@@ -10,6 +10,7 @@ interface JeopardyGameProps {
   teams?: Team[];
   onAwardPoints: (points: number, isCorrect: boolean) => void;
   onUpdateTeamScore?: (teamId: string, delta: number) => void;
+  timerDuration?: number;
 }
 
 interface JeopardyCell {
@@ -24,6 +25,7 @@ export const JeopardyGame: React.FC<JeopardyGameProps> = ({
   teams,
   onAwardPoints,
   onUpdateTeamScore,
+  timerDuration = 20,
 }) => {
   const [usedQuestionIds, setUsedQuestionIds] = useState<Set<string>>(new Set());
   const [activeQuestion, setActiveQuestion] = useState<Question | null>(null);
@@ -76,12 +78,14 @@ export const JeopardyGame: React.FC<JeopardyGameProps> = ({
   const handleSelectAnswer = (option: string) => {
     if (!activeQuestion) return;
     setSelectedAnswer(option);
-    const isCorrect = option === activeQuestion.correctAnswer;
+    const isCorrect = option !== '' && option !== '__TIME_UP__' && option === activeQuestion.correctAnswer;
     if (isCorrect) {
       soundEngine.playCorrect();
       onAwardPoints(activePoints, true);
     } else {
-      soundEngine.playWrong();
+      if (option !== '__TIME_UP__') {
+        soundEngine.playWrong();
+      }
       onAwardPoints(0, false);
     }
   };
@@ -211,6 +215,8 @@ export const JeopardyGame: React.FC<JeopardyGameProps> = ({
             selectedAnswer={selectedAnswer}
             isAnswerRevealed={isRevealed}
             onSelectAnswer={handleSelectAnswer}
+            timerDuration={timerDuration}
+            onTimeUp={handleBackToBoard}
           />
         </motion.div>
       )}

@@ -12,6 +12,7 @@ interface SpinWheelGameProps {
   onAwardPoints: (points: number, isCorrect: boolean) => void;
   teams?: Team[];
   selectedTeamId?: string;
+  timerDuration?: number;
 }
 
 const WHEEL_COLORS = [
@@ -25,6 +26,7 @@ export const SpinWheelGame: React.FC<SpinWheelGameProps> = ({
   preventRepeats = true,
   labelType = 'question',
   onAwardPoints,
+  timerDuration = 20,
 }) => {
   const [usedQuestionIds, setUsedQuestionIds] = useState<Set<string>>(new Set());
   const [isSpinning, setIsSpinning] = useState(false);
@@ -170,12 +172,14 @@ export const SpinWheelGame: React.FC<SpinWheelGameProps> = ({
   const handleSelectAnswer = (option: string) => {
     if (!currentQuestion) return;
     setSelectedAnswer(option);
-    const isCorrect = option === currentQuestion.correctAnswer;
+    const isCorrect = option !== '' && option !== '__TIME_UP__' && option === currentQuestion.correctAnswer;
     if (isCorrect) {
       soundEngine.playCorrect();
       onAwardPoints(currentQuestion.points, true);
     } else {
-      soundEngine.playWrong();
+      if (option !== '__TIME_UP__') {
+        soundEngine.playWrong();
+      }
       onAwardPoints(0, false);
     }
   };
@@ -274,6 +278,8 @@ export const SpinWheelGame: React.FC<SpinWheelGameProps> = ({
             selectedAnswer={selectedAnswer}
             isAnswerRevealed={isRevealed}
             onSelectAnswer={handleSelectAnswer}
+            timerDuration={timerDuration}
+            onTimeUp={handleNextSpin}
           />
         </motion.div>
       )}

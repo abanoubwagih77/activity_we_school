@@ -186,6 +186,7 @@ export const SpeedQuizGame: React.FC<SpeedQuizGameProps> = ({
           selectedAnswer={selectedAnswer}
           isAnswerRevealed={isRevealed}
           onSelectAnswer={handleSelectAnswer}
+          showTimer={false}
         />
       )}
     </div>

@@ -9,12 +9,14 @@ interface TrueFalseGameProps {
   questions: Question[];
   onAwardPoints: (points: number, isCorrect: boolean) => void;
   onFinish: () => void;
+  timerDuration?: number;
 }
 
 export const TrueFalseGame: React.FC<TrueFalseGameProps> = ({
   questions,
   onAwardPoints,
   onFinish,
+  timerDuration = 20,
 }) => {
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
@@ -25,12 +27,14 @@ export const TrueFalseGame: React.FC<TrueFalseGameProps> = ({
   const handleSelect = (option: string) => {
     if (!currentQuestion) return;
     setSelectedAnswer(option);
-    const isCorrect = option.toLowerCase() === currentQuestion.correctAnswer.toLowerCase();
+    const isCorrect = option !== '' && option !== '__TIME_UP__' && option.toLowerCase() === currentQuestion.correctAnswer.toLowerCase();
     if (isCorrect) {
       soundEngine.playCorrect();
       onAwardPoints(currentQuestion.points, true);
     } else {
-      soundEngine.playWrong();
+      if (option !== '__TIME_UP__') {
+        soundEngine.playWrong();
+      }
       onAwardPoints(0, false);
     }
   };
@@ -119,6 +123,8 @@ export const TrueFalseGame: React.FC<TrueFalseGameProps> = ({
         selectedAnswer={selectedAnswer}
         isAnswerRevealed={isRevealed}
         onSelectAnswer={handleSelect}
+        timerDuration={timerDuration}
+        onTimeUp={handleNext}
       />
     </div>
   );
