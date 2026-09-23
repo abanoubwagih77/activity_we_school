@@ -1,0 +1,6 @@
+{
+  "name": "منصة وي",
+  "description": "منصة وي التفاعلية للمعلمين لإدارة بنوك الأسئلة والأنشطة والمسابقات الصفية المستقلة على شاشات العرض والبروجيكتور.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
