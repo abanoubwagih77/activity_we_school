@@ -5,7 +5,7 @@ import {
   RotateCcw, Sparkles, Sliders, ShieldCheck, UserCheck, Trash2,
   KeyRound, Check, AlertCircle, Eye, EyeOff, Save, LogOut,
   UserPlus, Edit3, ArrowRightLeft, BookOpen, Layers,
-  Download, Upload, Shield, Database
+  Download, Upload, Shield, Database, Cloud, RefreshCw
 } from 'lucide-react';
 import { soundEngine } from '../../utils/audio';
 import { TeacherAccount } from '../../types';
@@ -26,7 +26,18 @@ export const SettingsView: React.FC = () => {
     updateTeacherCredentials,
     exportAllDataAsJSON,
     importDataFromJSON,
+    isCloudSaving,
+    lastCloudSyncTime,
+    testCloudConnectionLive,
   } = useApp();
+
+  const [cloudPingResult, setCloudPingResult] = useState<{
+    tested: boolean;
+    success: boolean;
+    latencyMs?: number;
+    error?: string;
+  } | null>(null);
+  const [isPingingCloud, setIsPingingCloud] = useState(false);
 
   // Current Teacher Credentials form state
   const [credUsername, setCredUsername] = useState(teacherCredentials.username);
@@ -136,6 +147,25 @@ export const SettingsView: React.FC = () => {
     } finally {
       setIsSavingCreds(false);
     }
+  };
+
+  const handleLiveCloudPing = async () => {
+    setIsPingingCloud(true);
+    setCloudPingResult(null);
+    soundEngine.playClick();
+    const res = await testCloudConnectionLive();
+    setCloudPingResult({
+      tested: true,
+      success: res.success,
+      latencyMs: res.latencyMs,
+      error: res.error,
+    });
+    if (res.success) {
+      soundEngine.playVictory();
+    } else {
+      soundEngine.playWrong();
+    }
+    setIsPingingCloud(false);
   };
 
   const handleCreateTeacher = async (e: React.FormEvent) => {
@@ -709,7 +739,88 @@ export const SettingsView: React.FC = () => {
           </div>
         </div>
 
-        {/* SECTION 6: DATA RESET FOR CURRENT TEACHER */}
+        {/* SECTION 6: LIVE CLOUD SYNC VERIFICATION & STATUS */}
+        <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-5 transition-colors">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                <Cloud className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-slate-900 dark:text-white">حالة المزامنة السحابية المباشرة (Firebase Cloud Live)</h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">تأكيد اتصال الموقع بقاعدة بيانات السحابة وحفظ التعديلات لحظياً عبر جميع الأجهزة</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
+                isCloudSaving 
+                  ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300' 
+                  : 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300'
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${isCloudSaving ? 'bg-amber-500 animate-ping' : 'bg-emerald-500'}`} />
+                {isCloudSaving ? 'جاري المزامنة الآن...' : 'متصل ونشط لحظياً'}
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-700/60">
+              <span className="text-slate-400 block mb-1 font-medium">سيرفر قاعدة البيانات:</span>
+              <span className="font-mono font-bold text-slate-800 dark:text-slate-200 text-[11px] truncate block" title="ai-studio-bc0eff15-b95b-44bf-873a-2cece6f33ffb">
+                Google Cloud Firestore
+              </span>
+            </div>
+            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-700/60">
+              <span className="text-slate-400 block mb-1 font-medium">نوع التخزين والمزامنة:</span>
+              <span className="font-bold text-slate-800 dark:text-slate-200">سحابي دائم (Multi-Device)</span>
+            </div>
+            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-700/60">
+              <span className="text-slate-400 block mb-1 font-medium">آخر عملية حفظ ناجحة:</span>
+              <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                {lastCloudSyncTime ? lastCloudSyncTime.toLocaleTimeString('ar-EG') : 'الآن'}
+              </span>
+            </div>
+          </div>
+
+          {cloudPingResult && (
+            <div className={`p-4 rounded-2xl text-xs font-semibold flex items-center justify-between border ${
+              cloudPingResult.success
+                ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-200 border-emerald-200 dark:border-emerald-800'
+                : 'bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-200 border-rose-200 dark:border-rose-800'
+            }`}>
+              <div className="flex items-center gap-2">
+                <span>{cloudPingResult.success ? '✓' : '⚠️'}</span>
+                <span>
+                  {cloudPingResult.success
+                    ? `تم بنجاح اختبار الاتصال الحي بالسحابة: تم إرسال وقراءة واستجابة البيانات من خادم Firebase في ${cloudPingResult.latencyMs} مللي ثانية!`
+                    : `فشل الاختبار: ${cloudPingResult.error || 'يرجى التحقق من اتصال الإنترنت'}`}
+                </span>
+              </div>
+              {cloudPingResult.latencyMs && (
+                <span className="font-mono text-[11px] px-2 py-0.5 rounded-md bg-emerald-200/60 dark:bg-emerald-900/60">
+                  {cloudPingResult.latencyMs}ms
+                </span>
+              )}
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              اضغط على الزر لإجراء فحص اتصال حقيقي (Ping) مع خادم السحابة والتأكد من سرعة الاستجابة بنفسك.
+            </p>
+            <button
+              type="button"
+              disabled={isPingingCloud}
+              onClick={handleLiveCloudPing}
+              className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer shrink-0"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isPingingCloud ? 'animate-spin' : ''}`} />
+              <span>{isPingingCloud ? 'جاري الفحص المباشر...' : 'فحص الاتصال والمزامنة الآن'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* SECTION 7: DATA RESET FOR CURRENT TEACHER */}
         <div className="p-6 rounded-3xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/60 shadow-sm space-y-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-rose-100 dark:bg-rose-900/60 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">

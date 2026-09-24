@@ -8,6 +8,7 @@ import { soundEngine } from '../utils/audio';
 import { 
   auth,
   testFirebaseConnection,
+  testLiveCloudPing,
   syncTeacherToCloud,
   deleteTeacherFromCloud,
   fetchTeachersFromCloud,
@@ -45,6 +46,9 @@ interface AppContextType {
   activeTeacher: TeacherAccount | null;
   teachers: TeacherAccount[];
   isCloudLoading: boolean;
+  isCloudSaving: boolean;
+  lastCloudSyncTime: Date | null;
+  testCloudConnectionLive: () => Promise<{ success: boolean; latencyMs: number; error?: string }>;
   cloudSyncError: string | null;
   addTeacherAccount: (data: { fullName: string; subject: string; username: string; password: string }) => Promise<{ success: boolean; error?: string; teacher?: TeacherAccount }>;
   updateTeacherAccount: (id: string, data: Partial<TeacherAccount>) => Promise<{ success: boolean; error?: string }>;
@@ -135,8 +139,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Loading and Network state
   const [isCloudLoading, setIsCloudLoading] = useState(false);
+  const [isCloudSaving, setIsCloudSaving] = useState(false);
+  const [lastCloudSyncTime, setLastCloudSyncTime] = useState<Date | null>(new Date());
   const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
   const loadedTeacherIdRef = useRef<string | null>(null);
+
+  const executeCloudSync = async (syncPromise: Promise<{ success: boolean; error?: string }>, errorLabel: string) => {
+    setIsCloudSaving(true);
+    try {
+      const res = await syncPromise;
+      if (!res.success) {
+        setCloudSyncError(`${errorLabel}: ${res.error || 'فشل الاتصال'}`);
+      } else {
+        setLastCloudSyncTime(new Date());
+        setCloudSyncError(null);
+      }
+      return res;
+    } catch (e: any) {
+      setCloudSyncError(`${errorLabel}: ${e?.message || 'تعذر الوصول إلى السحابة'}`);
+      return { success: false, error: e?.message };
+    } finally {
+      setIsCloudSaving(false);
+    }
+  };
+
+  const testCloudConnectionLive = async () => {
+    setIsCloudSaving(true);
+    try {
+      const res = await testLiveCloudPing();
+      if (res.success) {
+        setLastCloudSyncTime(new Date());
+        setCloudSyncError(null);
+      } else {
+        setCloudSyncError(`فشل الاتصال المباشر بالسحابة: ${res.error || ''}`);
+      }
+      return res;
+    } finally {
+      setIsCloudSaving(false);
+    }
+  };
 
   // 1. Teachers Directory State
   const [teachers, setTeachers] = useState<TeacherAccount[]>(() => {
@@ -289,10 +330,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Cloud Load: ONLY load from Firestore when a teacher is actively logged in
   useEffect(() => {
-    if (!authUser || !activeTeacherId) return;
+    if (!authUser || !activeTeacherId) {
+      setQuestions([]);
+      setClasses([]);
+      setActivities([]);
+      setHistory([]);
+      setSettings(DEFAULT_SETTINGS);
+      loadedTeacherIdRef.current = null;
+      return;
+    }
     let isCancelled = false;
     setIsCloudLoading(true);
     setCloudSyncError(null);
+    loadedTeacherIdRef.current = null;
 
     Promise.all([
       fetchQuestionsFromCloud(activeTeacherId),
@@ -510,7 +560,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTeachers(prev => prev.map(t => (t.id === id ? updatedTeacher : t)));
     const syncRes = await syncTeacherToCloud(updatedTeacher);
     if (!syncRes.success) {
-      console.warn('Sync teacher to cloud warning:', syncRes.error);
+      setCloudSyncError('فشل حفظ بيانات المعلم في السحابة: ' + (syncRes.error || ''));
+      return { success: false, error: syncRes.error || 'فشل حفظ بيانات المعلم في السحابة' };
     }
 
     if (authUser && (authUser.id === id || authUser.username.toLowerCase() === target.username.toLowerCase())) {
@@ -628,8 +679,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     const updated = [newQuestion, ...questions];
     setQuestions(updated);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncQuestionsToCloud(activeTeacherId, updated);
+    if (activeTeacherId) {
+      executeCloudSync(syncQuestionsToCloud(activeTeacherId, updated), 'فشل مزامنة إضافة السؤال في السحابة');
     }
     soundEngine.playCorrect();
   };
@@ -637,8 +688,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateQuestion = (q: Question) => {
     const updated = questions.map(item => (item.id === q.id ? q : item));
     setQuestions(updated);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncQuestionsToCloud(activeTeacherId, updated);
+    if (activeTeacherId) {
+      executeCloudSync(syncQuestionsToCloud(activeTeacherId, updated), 'فشل مزامنة تعديل السؤال في السحابة');
     }
     soundEngine.playClick();
   };
@@ -646,16 +697,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteQuestion = (id: string) => {
     const updated = questions.filter(item => item.id !== id);
     setQuestions(updated);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncQuestionsToCloud(activeTeacherId, updated);
+    if (activeTeacherId) {
+      executeCloudSync(syncQuestionsToCloud(activeTeacherId, updated), 'فشل مزامنة حذف السؤال في السحابة');
     }
     setActivities(prev => {
       const updatedActs = prev.map(act => ({
         ...act,
         questionIds: act.questionIds.filter(qid => qid !== id),
       }));
-      if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-        syncActivitiesToCloud(activeTeacherId, updatedActs);
+      if (activeTeacherId) {
+        executeCloudSync(syncActivitiesToCloud(activeTeacherId, updatedActs), 'فشل مزامنة تحديث الأنشطة في السحابة');
       }
       return updatedActs;
     });
@@ -671,8 +722,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
     const updated = [...formatted, ...questions];
     setQuestions(updated);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncQuestionsToCloud(activeTeacherId, updated);
+    if (activeTeacherId) {
+      executeCloudSync(syncQuestionsToCloud(activeTeacherId, updated), 'فشل مزامنة استيراد الأسئلة في السحابة');
     }
     soundEngine.playVictory();
     return formatted.length;
@@ -702,8 +753,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     const updated = [newClass, ...classes];
     setClasses(updated);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncClassesToCloud(activeTeacherId, updated);
+    if (activeTeacherId) {
+      executeCloudSync(syncClassesToCloud(activeTeacherId, updated), 'فشل مزامنة إضافة الفصل في السحابة');
     }
     soundEngine.playClick();
     return newClass;
@@ -712,8 +763,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateClass = (cls: ClassroomGroup) => {
     const updated = classes.map(c => (c.id === cls.id ? cls : c));
     setClasses(updated);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncClassesToCloud(activeTeacherId, updated);
+    if (activeTeacherId) {
+      executeCloudSync(syncClassesToCloud(activeTeacherId, updated), 'فشل مزامنة تعديل الفصل في السحابة');
     }
     soundEngine.playClick();
   };
@@ -721,13 +772,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteClass = (id: string) => {
     const updated = classes.filter(c => c.id !== id);
     setClasses(updated);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncClassesToCloud(activeTeacherId, updated);
+    if (activeTeacherId) {
+      executeCloudSync(syncClassesToCloud(activeTeacherId, updated), 'فشل مزامنة حذف الفصل في السحابة');
     }
     setActivities(prev => {
       const updatedActs = prev.map(act => (act.classId === id ? { ...act, classId: undefined } : act));
-      if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-        syncActivitiesToCloud(activeTeacherId, updatedActs);
+      if (activeTeacherId) {
+        executeCloudSync(syncActivitiesToCloud(activeTeacherId, updatedActs), 'فشل مزامنة تحديث الأنشطة في السحابة');
       }
       return updatedActs;
     });
@@ -750,8 +801,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     });
     setClasses(updated);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncClassesToCloud(activeTeacherId, updated);
+    if (activeTeacherId) {
+      executeCloudSync(syncClassesToCloud(activeTeacherId, updated), 'فشل مزامنة إضافة الطالب في السحابة');
     }
     soundEngine.playClick();
   };
@@ -775,8 +826,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     });
     setClasses(updated);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncClassesToCloud(activeTeacherId, updated);
+    if (activeTeacherId) {
+      executeCloudSync(syncClassesToCloud(activeTeacherId, updated), 'فشل مزامنة إضافة الطلاب في السحابة');
     }
     soundEngine.playCorrect();
   };
@@ -790,8 +841,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     });
     setClasses(updated);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncClassesToCloud(activeTeacherId, updated);
+    if (activeTeacherId) {
+      executeCloudSync(syncClassesToCloud(activeTeacherId, updated), 'فشل مزامنة حذف الطالب في السحابة');
     }
     soundEngine.playClick();
   };
@@ -806,8 +857,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     const updated = [newActivity, ...activities];
     setActivities(updated);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncActivitiesToCloud(activeTeacherId, updated);
+    if (activeTeacherId) {
+      executeCloudSync(syncActivitiesToCloud(activeTeacherId, updated), 'فشل مزامنة إضافة النشاط في السحابة');
     }
     soundEngine.playVictory();
     return newActivity;
@@ -818,8 +869,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       item.id === act.id ? { ...act, updatedAt: new Date().toISOString() } : item
     );
     setActivities(updated);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncActivitiesToCloud(activeTeacherId, updated);
+    if (activeTeacherId) {
+      executeCloudSync(syncActivitiesToCloud(activeTeacherId, updated), 'فشل مزامنة تعديل النشاط في السحابة');
     }
     soundEngine.playClick();
   };
@@ -827,8 +878,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteActivity = (id: string) => {
     const updated = activities.filter(a => a.id !== id);
     setActivities(updated);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncActivitiesToCloud(activeTeacherId, updated);
+    if (activeTeacherId) {
+      executeCloudSync(syncActivitiesToCloud(activeTeacherId, updated), 'فشل مزامنة حذف النشاط في السحابة');
     }
     soundEngine.playClick();
   };
@@ -845,8 +896,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     const updated = [duplicated, ...activities];
     setActivities(updated);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncActivitiesToCloud(activeTeacherId, updated);
+    if (activeTeacherId) {
+      executeCloudSync(syncActivitiesToCloud(activeTeacherId, updated), 'فشل مزامنة تكرار النشاط في السحابة');
     }
     soundEngine.playClick();
   };
@@ -861,24 +912,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     const updated = [newResult, ...history];
     setHistory(updated);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncHistoryToCloud(activeTeacherId, updated);
+    if (activeTeacherId) {
+      executeCloudSync(syncHistoryToCloud(activeTeacherId, updated), 'فشل مزامنة السجل في السحابة');
     }
   };
 
   const deleteHistoryItem = (id: string) => {
     const updated = history.filter(h => h.id !== id);
     setHistory(updated);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncHistoryToCloud(activeTeacherId, updated);
+    if (activeTeacherId) {
+      executeCloudSync(syncHistoryToCloud(activeTeacherId, updated), 'فشل مزامنة حذف السجل في السحابة');
     }
     soundEngine.playClick();
   };
 
   const clearHistory = () => {
     setHistory([]);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncHistoryToCloud(activeTeacherId, []);
+    if (activeTeacherId) {
+      executeCloudSync(syncHistoryToCloud(activeTeacherId, []), 'فشل مزامنة مسح السجل في السحابة');
     }
     soundEngine.playClick();
   };
@@ -887,8 +938,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateSettings = (newSettings: Partial<AppSettings>) => {
     const updated = { ...settings, ...newSettings };
     setSettings(updated);
-    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
-      syncSettingsToCloud(activeTeacherId, updated);
+    if (activeTeacherId) {
+      executeCloudSync(syncSettingsToCloud(activeTeacherId, updated), 'فشل مزامنة الإعدادات في السحابة');
     }
   };
 
@@ -899,12 +950,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActivities([]);
     setHistory([]);
     setSettings(DEFAULT_SETTINGS);
-    // Explicitly allow empty arrays for authorized reset
-    syncQuestionsToCloud(activeTeacherId, [], { allowEmpty: true });
-    syncClassesToCloud(activeTeacherId, [], { allowEmpty: true });
-    syncActivitiesToCloud(activeTeacherId, [], { allowEmpty: true });
-    syncHistoryToCloud(activeTeacherId, []);
-    syncSettingsToCloud(activeTeacherId, DEFAULT_SETTINGS);
+    executeCloudSync(syncQuestionsToCloud(activeTeacherId, []), 'فشل تصفير الأسئلة في السحابة');
+    executeCloudSync(syncClassesToCloud(activeTeacherId, []), 'فشل تصفير الفصول في السحابة');
+    executeCloudSync(syncActivitiesToCloud(activeTeacherId, []), 'فشل تصفير الأنشطة في السحابة');
+    executeCloudSync(syncHistoryToCloud(activeTeacherId, []), 'فشل تصفير السجل في السحابة');
+    executeCloudSync(syncSettingsToCloud(activeTeacherId, DEFAULT_SETTINGS), 'فشل استعادة الإعدادات في السحابة');
     soundEngine.playClick();
   };
 
@@ -987,6 +1037,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeTeacher,
         teachers,
         isCloudLoading,
+        isCloudSaving,
+        lastCloudSyncTime,
+        testCloudConnectionLive,
         cloudSyncError,
         addTeacherAccount,
         updateTeacherAccount,

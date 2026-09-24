@@ -92,6 +92,32 @@ export async function testFirebaseConnection(): Promise<boolean> {
   }
 }
 
+/**
+ * Live Cloud Ping Test: Real-time roundtrip test to verify read & write on the actual Firestore DB
+ */
+export async function testLiveCloudPing(): Promise<{ success: boolean; latencyMs: number; error?: string }> {
+  const startTime = Date.now();
+  try {
+    const pingDocRef = doc(db, 'system', 'ping_check');
+    await setDoc(pingDocRef, {
+      lastPing: new Date().toISOString(),
+      timestamp: startTime,
+      clientStatus: 'active_online'
+    }, { merge: true });
+    const snap = await getDocFromServer(pingDocRef);
+    const latencyMs = Date.now() - startTime;
+    return { success: snap.exists(), latencyMs };
+  } catch (error: any) {
+    const latencyMs = Date.now() - startTime;
+    console.error('[Firebase Ping Failed]', error);
+    return { 
+      success: false, 
+      latencyMs, 
+      error: error?.message || 'تعذر الاتصال بقاعدة البيانات السحابية' 
+    };
+  }
+}
+
 // ----------------------------------------------------
 // Authentication Service Methods
 // ----------------------------------------------------
@@ -117,9 +143,11 @@ export async function loginWithFirebaseAuth(usernameOrEmail: string, pass: strin
         );
 
         if (matched) {
-          // Check password: match against stored password or default master admin
+          // Check password: if teacher has an updated password in Firestore, enforce it strictly
           const isMasterAdmin = (matched.id === 'teacher_master_default' || matched.username.toLowerCase() === 'admin' || matched.username.toLowerCase() === 'abanoub');
-          const isPasswordValid = (matched.password && matched.password === pass) || (isMasterAdmin && (pass === 'Bebo@1234' || pass === matched.password));
+          const isPasswordValid = matched.password 
+            ? (matched.password === pass) 
+            : (isMasterAdmin && pass === 'Bebo@1234');
 
           if (isPasswordValid) {
             // Attempt to register in Firebase Auth if provider is enabled
@@ -353,11 +381,6 @@ export async function syncQuestionsToCloud(
   options?: { allowEmpty?: boolean }
 ): Promise<{ success: boolean; error?: string }> {
   if (!teacherId) return { success: false, error: 'معرف المعلم غير محدد' };
-  // Guard against accidental wipes: only allow saving empty array if explicitly allowed
-  if (questions.length === 0 && !options?.allowEmpty) {
-    console.warn('[Firebase] Refusing to overwrite cloud questions with unverified empty array');
-    return { success: false, error: 'تم إلغاء الحفظ لمنع مسح الأسئلة بالخطأ' };
-  }
   try {
     const docRef = doc(db, 'teachers', teacherId, 'data', 'questions');
     await setDoc(docRef, { 
@@ -396,10 +419,6 @@ export async function syncClassesToCloud(
   options?: { allowEmpty?: boolean }
 ): Promise<{ success: boolean; error?: string }> {
   if (!teacherId) return { success: false, error: 'معرف المعلم غير محدد' };
-  if (classes.length === 0 && !options?.allowEmpty) {
-    console.warn('[Firebase] Refusing to overwrite cloud classes with unverified empty array');
-    return { success: false, error: 'تم إلغاء الحفظ لمنع مسح الفصول بالخطأ' };
-  }
   try {
     const docRef = doc(db, 'teachers', teacherId, 'data', 'classes');
     await setDoc(docRef, { 
@@ -438,10 +457,6 @@ export async function syncActivitiesToCloud(
   options?: { allowEmpty?: boolean }
 ): Promise<{ success: boolean; error?: string }> {
   if (!teacherId) return { success: false, error: 'معرف المعلم غير محدد' };
-  if (activities.length === 0 && !options?.allowEmpty) {
-    console.warn('[Firebase] Refusing to overwrite cloud activities with unverified empty array');
-    return { success: false, error: 'تم إلغاء الحفظ لمنع مسح الأنشطة بالخطأ' };
-  }
   try {
     const docRef = doc(db, 'teachers', teacherId, 'data', 'activities');
     await setDoc(docRef, { 

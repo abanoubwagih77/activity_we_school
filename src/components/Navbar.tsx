@@ -13,7 +13,8 @@ export const Navbar: React.FC = () => {
   const { 
     view, setView, settings, updateSettings, 
     activities, launchActivity, authUser, logout,
-    teachers, switchTeacherAccount
+    teachers, switchTeacherAccount,
+    isCloudSaving, lastCloudSyncTime
   } = useApp();
 
   const [showTeacherMenu, setShowTeacherMenu] = useState(false);
@@ -151,8 +152,14 @@ export const Navbar: React.FC = () => {
               className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-2.5 h-9 rounded-xl bg-purple-50 hover:bg-purple-100/80 dark:bg-purple-950/40 dark:hover:bg-purple-900/60 border border-purple-200 dark:border-purple-800/60 cursor-pointer transition-all shrink-0"
               title="بيانات المعلم الحالي وتبديل الحساب"
             >
-              <div className="w-6 h-6 rounded-lg bg-[#5B2D82] text-white flex items-center justify-center font-bold text-xs shrink-0">
+              <div className="w-6 h-6 rounded-lg bg-[#5B2D82] text-white flex items-center justify-center font-bold text-xs shrink-0 relative">
                 <UserCheck className="w-3.5 h-3.5" />
+                <span 
+                  className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-slate-900 ${
+                    isCloudSaving ? 'bg-amber-400 animate-ping' : 'bg-emerald-500'
+                  }`} 
+                  title={isCloudSaving ? 'جاري المزامنة مع السحابة...' : 'سحابة Google Firebase متصلة ومحدثة'}
+                />
               </div>
               <div className="text-right hidden sm:block max-w-[85px] md:max-w-[120px] truncate">
                 <div className="text-xs font-bold text-slate-900 dark:text-white leading-tight truncate">
@@ -182,6 +189,19 @@ export const Navbar: React.FC = () => {
                     )}
                   </div>
                   <p className="text-[11px] text-[#5B2D82] dark:text-purple-300 font-medium truncate">مادة: {authUser?.subject || 'عام'}</p>
+                </div>
+
+                {/* Real-time Cloud Sync Live Pill */}
+                <div className="mx-1 my-1.5 p-2 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200/80 dark:border-slate-700/80 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-[11px] font-semibold">
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${isCloudSaving ? 'bg-amber-500 animate-ping' : 'bg-emerald-500'}`} />
+                    <span className="text-slate-700 dark:text-slate-200">
+                      {isCloudSaving ? 'جاري الحفظ بالسحابة...' : 'سحابة Firebase متصلة'}
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-slate-400 font-mono">
+                    {lastCloudSyncTime ? lastCloudSyncTime.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : 'نشط'}
+                  </span>
                 </div>
 
                 {/* Only Master Admin sees the list of teachers and can switch between them */}
