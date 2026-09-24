@@ -2,19 +2,21 @@
   "entities": {
     "Teacher": {
       "title": "Teacher",
-      "description": "Teacher profile and credentials",
+      "description": "Teacher profile authenticated via Firebase Auth",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
+        "uid": { "type": "string" },
         "username": { "type": "string" },
-        "password": { "type": "string" },
+        "email": { "type": "string" },
         "fullName": { "type": "string" },
         "subject": { "type": "string" },
         "role": { "type": "string", "enum": ["admin", "teacher"] },
         "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
         "isDefault": { "type": "boolean" }
       },
-      "required": ["id", "username", "password", "fullName", "subject", "role"]
+      "required": ["id", "username", "fullName", "subject", "role"]
     },
     "Question": {
       "title": "Question",
@@ -97,25 +99,25 @@
       "schema": { "$ref": "#/entities/Teacher" },
       "description": "Registered teachers directory"
     },
-    "/teachers/{teacherId}/questions/{questionId}": {
+    "/teachers/{teacherId}/data/questions": {
       "schema": { "$ref": "#/entities/Question" },
-      "description": "Questions bank isolated per teacher"
+      "description": "Questions bank container isolated per teacher"
     },
-    "/teachers/{teacherId}/classes/{classId}": {
+    "/teachers/{teacherId}/data/classes": {
       "schema": { "$ref": "#/entities/Classroom" },
-      "description": "Classes and students isolated per teacher"
+      "description": "Classes and students container isolated per teacher"
     },
-    "/teachers/{teacherId}/activities/{activityId}": {
+    "/teachers/{teacherId}/data/activities": {
       "schema": { "$ref": "#/entities/Activity" },
-      "description": "Configured activities isolated per teacher"
+      "description": "Configured activities container isolated per teacher"
     },
-    "/teachers/{teacherId}/history/{historyId}": {
+    "/teachers/{teacherId}/data/history": {
       "schema": { "$ref": "#/entities/HistorySession" },
-      "description": "Completed game sessions history"
+      "description": "Completed game sessions history container"
     },
-    "/teachers/{teacherId}/settings/appSettings": {
+    "/teachers/{teacherId}/data/settings": {
       "schema": { "$ref": "#/entities/AppSettings" },
-      "description": "Settings per teacher"
+      "description": "Settings container per teacher"
     }
   }
 }

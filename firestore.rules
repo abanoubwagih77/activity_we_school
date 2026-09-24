@@ -1,18 +1,32 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Allow read/write for teachers and all teacher isolated subcollections
-    match /teachers/{teacherId} {
-      allow read, write: if true;
 
-      match /{subcollection}/{docId=**} {
+    // System connection check document
+    match /system/{docId} {
+      allow read, write: if true;
+    }
+
+    // Teachers profiles and directory
+    match /teachers/{teacherId} {
+      // Allow read so login, teacher profiles and navigation work seamlessly
+      allow read: if true;
+
+      // Allow profile create & update
+      allow create, update: if true;
+
+      // Protect master teacher from deletion
+      allow delete: if teacherId != 'teacher_master_default';
+
+      // Sub-collections: questions, classes, activities, history, settings
+      match /data/{dataType} {
         allow read, write: if true;
       }
     }
 
-    // Health check and root documents
+    // Global default-deny rule for unmapped collections
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }

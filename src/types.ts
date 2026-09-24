@@ -130,17 +130,22 @@ export interface AppSettings {
 
 export interface TeacherAccount {
   id: string;
+  uid?: string;
   username: string;
-  password: string;
+  email?: string;
+  password?: string; // Optional/legacy for migration only
   fullName: string;
   subject: string;
   role?: string;
   createdAt: string;
+  updatedAt?: string;
   isDefault?: boolean;
 }
 
 export interface AuthUser {
   id: string;
+  uid?: string;
+  email?: string;
   username: string;
   fullName: string;
   subject: string;
@@ -150,7 +155,8 @@ export interface AuthUser {
 
 export interface TeacherCredentials {
   username: string;
-  password: string;
+  email?: string;
+  password?: string;
   fullName: string;
   subject?: string;
 }

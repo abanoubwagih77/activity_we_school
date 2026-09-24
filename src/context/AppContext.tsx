@@ -3,9 +3,10 @@ import {
   Question, ClassroomGroup, Student, ActivityConfig, 
   ActivitySessionResult, AppSettings, AuthUser, TeacherCredentials, TeacherAccount 
 } from '../types';
-import { DEFAULT_QUESTIONS, DEFAULT_CLASSES, DEFAULT_ACTIVITIES, DEFAULT_SETTINGS } from '../data/defaultData';
+import { DEFAULT_SETTINGS } from '../data/defaultData';
 import { soundEngine } from '../utils/audio';
 import { 
+  auth,
   testFirebaseConnection,
   syncTeacherToCloud,
   deleteTeacherFromCloud,
@@ -20,7 +21,13 @@ import {
   fetchHistoryFromCloud,
   syncSettingsToCloud,
   fetchSettingsFromCloud,
+  loginWithFirebaseAuth,
+  createFirebaseAuthTeacher,
+  updateUserPasswordInAuth,
+  requestPasswordResetEmail,
+  logoutFirebaseAuth
 } from '../services/firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 
 export type ViewMode = 
   | 'dashboard'
@@ -37,14 +44,17 @@ interface AppContextType {
   authUser: AuthUser | null;
   activeTeacher: TeacherAccount | null;
   teachers: TeacherAccount[];
-  addTeacherAccount: (data: { fullName: string; subject: string; username: string; password: string }) => { success: boolean; error?: string; teacher?: TeacherAccount };
-  updateTeacherAccount: (id: string, data: Partial<TeacherAccount>) => { success: boolean; error?: string };
-  deleteTeacherAccount: (id: string) => { success: boolean; error?: string };
+  isCloudLoading: boolean;
+  cloudSyncError: string | null;
+  addTeacherAccount: (data: { fullName: string; subject: string; username: string; password: string }) => Promise<{ success: boolean; error?: string; teacher?: TeacherAccount }>;
+  updateTeacherAccount: (id: string, data: Partial<TeacherAccount>) => Promise<{ success: boolean; error?: string }>;
+  deleteTeacherAccount: (id: string) => Promise<{ success: boolean; error?: string }>;
   switchTeacherAccount: (teacherId: string) => boolean;
   loginWithCredentials: (username: string, password: string) => Promise<{ success: boolean; error?: string; user?: AuthUser }>;
+  requestPasswordReset: (usernameOrEmail: string) => Promise<{ success: boolean; error?: string }>;
 
   teacherCredentials: TeacherCredentials;
-  updateTeacherCredentials: (newCreds: { username: string; password?: string; fullName?: string; subject?: string }) => boolean;
+  updateTeacherCredentials: (newCreds: { username: string; password?: string; fullName?: string; subject?: string }) => Promise<boolean>;
   login: (user: AuthUser) => void;
   logout: () => void;
   questions: Question[];
@@ -53,6 +63,10 @@ interface AppContextType {
   history: ActivitySessionResult[];
   settings: AppSettings;
   activeActivity: ActivityConfig | null;
+
+  // Backup & Recovery
+  exportAllDataAsJSON: () => void;
+  importDataFromJSON: (jsonStr: string) => Promise<{ success: boolean; error?: string }>;
 
   // Navigation & Launch
   launchActivity: (activity: ActivityConfig) => void;
@@ -92,31 +106,24 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | null>(null);
 
 const STORAGE_KEYS = {
-  AUTH: 'we_auth_active_v1',
-  TEACHERS: 'we_teachers_list_v1',
-  LEGACY_AUTH: 'classtech_auth_v2',
-  LEGACY_CREDS: 'classtech_credentials_v2',
-  LEGACY_QUESTIONS: 'classtech_questions_v2',
-  LEGACY_CLASSES: 'classtech_classes_v2',
-  LEGACY_ACTIVITIES: 'classtech_activities_v2',
-  LEGACY_HISTORY: 'classtech_history_v2',
-  LEGACY_SETTINGS: 'classtech_settings_v2',
+  AUTH: 'we_auth_active_v2',
+  TEACHERS: 'we_teachers_list_v2',
 };
 
 const getTeacherDataKeys = (teacherId: string) => ({
-  QUESTIONS: `we_teacher_${teacherId}_questions`,
-  CLASSES: `we_teacher_${teacherId}_classes`,
-  ACTIVITIES: `we_teacher_${teacherId}_activities`,
-  HISTORY: `we_teacher_${teacherId}_history`,
-  SETTINGS: `we_teacher_${teacherId}_settings`,
+  QUESTIONS: `we_cache_${teacherId}_questions`,
+  CLASSES: `we_cache_${teacherId}_classes`,
+  ACTIVITIES: `we_cache_${teacherId}_activities`,
+  HISTORY: `we_cache_${teacherId}_history`,
+  SETTINGS: `we_cache_${teacherId}_settings`,
 });
 
+// Non-sensitive structure without any hardcoded passwords
 const DEFAULT_MASTER_TEACHER: TeacherAccount = {
   id: 'teacher_master_default',
   username: 'abanoub',
-  password: '123',
   fullName: 'أبانوب وجيه',
-  subject: 'حاسب آلي وبرمجة',
+  subject: 'حاسب آلي وتكنولوجيا',
   role: 'admin',
   createdAt: new Date().toISOString(),
   isDefault: true,
@@ -126,6 +133,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [view, setView] = useState<ViewMode>('dashboard');
   const [activeActivity, setActiveActivity] = useState<ActivityConfig | null>(null);
 
+  // Loading and Network state
+  const [isCloudLoading, setIsCloudLoading] = useState(false);
+  const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
+  const loadedTeacherIdRef = useRef<string | null>(null);
+
   // 1. Teachers Directory State
   const [teachers, setTeachers] = useState<TeacherAccount[]>(() => {
     try {
@@ -133,13 +145,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          // Normalize: The master account is always role: 'admin', all other created teachers are role: 'teacher'
           return parsed.map((t: TeacherAccount, index: number) => {
             const isMaster = t.isDefault || t.id === 'teacher_master_default' || index === 0;
             return {
               ...t,
               fullName: isMaster && (t.fullName === 'الأستاذ المسؤول' || !t.fullName) ? 'أبانوب وجيه' : t.fullName,
-              role: isMaster ? ('admin' as const) : ('teacher' as const),
+              role: isMaster ? ('admin' as const) : (t.role || 'teacher'),
               isDefault: isMaster ? true : false,
             };
           });
@@ -148,80 +159,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.error('Failed reading teachers from localStorage', e);
     }
-
-    // Check if legacy credentials exist to preserve existing user credentials
-    let initialMaster = { ...DEFAULT_MASTER_TEACHER };
-    try {
-      const legacyCreds = localStorage.getItem(STORAGE_KEYS.LEGACY_CREDS);
-      if (legacyCreds) {
-        const parsedCreds = JSON.parse(legacyCreds);
-        if (parsedCreds.username) initialMaster.username = parsedCreds.username;
-        if (parsedCreds.password) initialMaster.password = parsedCreds.password;
-        if (parsedCreds.fullName && parsedCreds.fullName !== 'الأستاذ المسؤول') {
-          initialMaster.fullName = parsedCreds.fullName;
-        } else {
-          initialMaster.fullName = 'أبانوب وجيه';
-        }
-        if (parsedCreds.subject) initialMaster.subject = parsedCreds.subject;
-      }
-    } catch {
-      // ignore
-    }
-
-    initialMaster.role = 'admin';
-    initialMaster.isDefault = true;
-
-    const defaultList = [initialMaster];
-    try {
-      localStorage.setItem(STORAGE_KEYS.TEACHERS, JSON.stringify(defaultList));
-    } catch {
-      // ignore
-    }
-    return defaultList;
+    return [DEFAULT_MASTER_TEACHER];
   });
 
-  // Keep teachers saved to localStorage
+  // Keep safe teachers list in localStorage (strictly strip any passwords)
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEYS.TEACHERS, JSON.stringify(teachers));
+      const sanitized = teachers.map(({ password, ...t }) => t);
+      localStorage.setItem(STORAGE_KEYS.TEACHERS, JSON.stringify(sanitized));
     } catch (e) {
       console.error(e);
     }
   }, [teachers]);
-
-  // 1. Initial Cloud Boot & Teachers Synchronization
-  useEffect(() => {
-    testFirebaseConnection();
-
-    // Fetch teachers directory from cloud
-    fetchTeachersFromCloud().then(cloudTeachers => {
-      if (cloudTeachers && cloudTeachers.length > 0) {
-        setTeachers(prev => {
-          const map = new Map<string, TeacherAccount>();
-          cloudTeachers.forEach(t => map.set(t.id, t));
-          // Retain any newly created locally that haven't synced
-          prev.forEach(t => {
-            if (!map.has(t.id)) map.set(t.id, t);
-          });
-          const merged = Array.from(map.values()).map((t, idx) => {
-            const isMaster = t.isDefault || t.id === 'teacher_master_default' || t.fullName === 'أبانوب وجيه' || idx === 0;
-            return {
-              ...t,
-              fullName: isMaster && (t.fullName === 'الأستاذ المسؤول' || !t.fullName) ? 'أبانوب وجيه' : t.fullName,
-              role: isMaster ? ('admin' as const) : ('teacher' as const),
-              isDefault: isMaster,
-            };
-          });
-          return merged;
-        });
-      } else {
-        // First boot or empty cloud: Seed cloud with initial master teacher
-        teachers.forEach(t => {
-          syncTeacherToCloud(t);
-        });
-      }
-    });
-  }, []);
 
   // 2. Active Logged-in Teacher Auth State
   const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
@@ -230,273 +179,141 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (savedAuth) {
         return JSON.parse(savedAuth);
       }
-      // Check legacy auth
-      const legacy = localStorage.getItem(STORAGE_KEYS.LEGACY_AUTH);
-      if (legacy) {
-        const parsedLegacy = JSON.parse(legacy);
-        return {
-          id: 'teacher_master_default',
-          username: parsedLegacy.username || 'admin',
-          fullName: parsedLegacy.fullName || 'الأستاذ المسؤول',
-          subject: 'حاسب آلي وتكنولوجيا',
-          role: parsedLegacy.role || 'admin',
-        };
-      }
     } catch {
       // ignore
     }
     return null;
   });
 
-  // Current active teacher account
-  const activeTeacher: TeacherAccount | null = React.useMemo(() => {
-    if (!authUser) return null;
-    return teachers.find(t => t.id === authUser.id || t.username.toLowerCase() === authUser.username.toLowerCase()) || null;
-  }, [authUser, teachers]);
-
-  // Keep authUser synchronized with activeTeacher role and name
+  // Initial cloud boot & teachers fetch
   useEffect(() => {
-    if (activeTeacher && authUser) {
-      const shouldSync = authUser.role !== activeTeacher.role || 
-                         authUser.fullName !== activeTeacher.fullName || 
-                         authUser.subject !== activeTeacher.subject ||
-                         authUser.id !== activeTeacher.id;
-      if (shouldSync) {
-        const synced: AuthUser = {
-          id: activeTeacher.id,
-          username: activeTeacher.username,
-          fullName: activeTeacher.fullName,
-          subject: activeTeacher.subject,
-          role: activeTeacher.role || 'teacher',
-        };
-        setAuthUser(synced);
-        try {
-          localStorage.setItem(STORAGE_KEYS.AUTH, JSON.stringify(synced));
-        } catch {
-          // ignore
+    testFirebaseConnection();
+
+    fetchTeachersFromCloud().then(cloudTeachers => {
+      if (cloudTeachers && cloudTeachers.length > 0) {
+        setTeachers(cloudTeachers);
+      }
+    });
+
+    // Listen to Firebase Auth state
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        // Synchronize with teacher profile
+        const cloudTeachers = await fetchTeachersFromCloud();
+        let matched = cloudTeachers?.find(t => 
+          t.uid === firebaseUser.uid || 
+          t.id === firebaseUser.uid || 
+          (t.email && t.email.toLowerCase() === firebaseUser.email?.toLowerCase())
+        );
+
+        // Auto-assign admin if matching primary project email
+        const isMasterAdminEmail = firebaseUser.email === 'abanoub.iskander77@gmail.com';
+
+        if (matched) {
+          const userAuth: AuthUser = {
+            id: matched.id,
+            uid: firebaseUser.uid,
+            email: firebaseUser.email || undefined,
+            username: matched.username,
+            fullName: matched.fullName,
+            subject: matched.subject,
+            role: isMasterAdminEmail ? 'admin' : (matched.role || 'teacher'),
+          };
+          setAuthUser(userAuth);
+          try {
+            localStorage.setItem(STORAGE_KEYS.AUTH, JSON.stringify(userAuth));
+          } catch {
+            // ignore
+          }
+        } else if (firebaseUser.email) {
+          // Profile not yet in teachers list, construct one
+          const fallbackUser: AuthUser = {
+            id: firebaseUser.uid,
+            uid: firebaseUser.uid,
+            email: firebaseUser.email,
+            username: firebaseUser.email.split('@')[0],
+            fullName: isMasterAdminEmail ? 'أبانوب وجيه' : (firebaseUser.displayName || firebaseUser.email.split('@')[0]),
+            subject: 'حاسب آلي وتكنولوجيا',
+            role: isMasterAdminEmail ? 'admin' : 'teacher',
+          };
+          setAuthUser(fallbackUser);
         }
       }
-    }
-  }, [activeTeacher, authUser]);
+    });
 
-  const activeTeacherId = activeTeacher?.id || 'teacher_master_default';
-  const prevTeacherIdRef = useRef<string>(activeTeacherId);
+    return () => unsubscribe();
+  }, []);
 
-  // Helper to load dataset for a specific teacher ID
-  const loadTeacherQuestions = (tId: string): Question[] => {
-    try {
-      const keys = getTeacherDataKeys(tId);
-      const stored = localStorage.getItem(keys.QUESTIONS);
-      if (stored) return JSON.parse(stored);
+  // Active Teacher Profile
+  const activeTeacher: TeacherAccount | null = React.useMemo(() => {
+    if (!authUser) return null;
+    return teachers.find(t => 
+      t.id === authUser.id || 
+      (t.uid && t.uid === authUser.uid) ||
+      t.username.toLowerCase() === authUser.username.toLowerCase()
+    ) || null;
+  }, [authUser, teachers]);
 
-      // If master teacher and no specific store yet, check legacy questions
-      if (tId === 'teacher_master_default') {
-        const legacy = localStorage.getItem(STORAGE_KEYS.LEGACY_QUESTIONS);
-        if (legacy) return JSON.parse(legacy);
-      }
-    } catch {
-      // ignore
-    }
-    return [];
-  };
+  const activeTeacherId = activeTeacher?.id || authUser?.id || null;
 
-  const loadTeacherClasses = (tId: string): ClassroomGroup[] => {
-    try {
-      const keys = getTeacherDataKeys(tId);
-      const stored = localStorage.getItem(keys.CLASSES);
-      if (stored) return JSON.parse(stored);
+  // 3. Isolated Datasets for Active Teacher
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [classes, setClasses] = useState<ClassroomGroup[]>([]);
+  const [activities, setActivities] = useState<ActivityConfig[]>([]);
+  const [history, setHistory] = useState<ActivitySessionResult[]>([]);
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
 
-      if (tId === 'teacher_master_default') {
-        const legacy = localStorage.getItem(STORAGE_KEYS.LEGACY_CLASSES);
-        if (legacy) return JSON.parse(legacy);
-      }
-    } catch {
-      // ignore
-    }
-    return [];
-  };
-
-  const loadTeacherActivities = (tId: string): ActivityConfig[] => {
-    try {
-      const keys = getTeacherDataKeys(tId);
-      const stored = localStorage.getItem(keys.ACTIVITIES);
-      if (stored) return JSON.parse(stored);
-
-      if (tId === 'teacher_master_default') {
-        const legacy = localStorage.getItem(STORAGE_KEYS.LEGACY_ACTIVITIES);
-        if (legacy) return JSON.parse(legacy);
-      }
-    } catch {
-      // ignore
-    }
-    return [];
-  };
-
-  const loadTeacherHistory = (tId: string): ActivitySessionResult[] => {
-    try {
-      const keys = getTeacherDataKeys(tId);
-      const stored = localStorage.getItem(keys.HISTORY);
-      if (stored) return JSON.parse(stored);
-
-      if (tId === 'teacher_master_default') {
-        const legacy = localStorage.getItem(STORAGE_KEYS.LEGACY_HISTORY);
-        if (legacy) return JSON.parse(legacy);
-      }
-    } catch {
-      // ignore
-    }
-    return [];
-  };
-
-  const loadTeacherSettings = (tId: string): AppSettings => {
-    try {
-      const keys = getTeacherDataKeys(tId);
-      const stored = localStorage.getItem(keys.SETTINGS);
-      if (stored) return JSON.parse(stored);
-
-      const legacy = localStorage.getItem(STORAGE_KEYS.LEGACY_SETTINGS);
-      if (legacy) return JSON.parse(legacy);
-    } catch {
-      // ignore
-    }
-    return DEFAULT_SETTINGS;
-  };
-
-  // 3. Isolated State per Teacher
-  const [questions, setQuestions] = useState<Question[]>(() => loadTeacherQuestions(activeTeacherId));
-  const [classes, setClasses] = useState<ClassroomGroup[]>(() => loadTeacherClasses(activeTeacherId));
-  const [activities, setActivities] = useState<ActivityConfig[]>(() => loadTeacherActivities(activeTeacherId));
-  const [history, setHistory] = useState<ActivitySessionResult[]>(() => loadTeacherHistory(activeTeacherId));
-  const [settings, setSettings] = useState<AppSettings>(() => loadTeacherSettings(activeTeacherId));
-
-  // Whenever the active teacher changes, swap to their isolated dataset!
+  // Cloud Load: ONLY load from Firestore when a teacher is actively logged in
   useEffect(() => {
-    if (prevTeacherIdRef.current !== activeTeacherId) {
-      // Load the new teacher's dataset from local storage immediately
-      setQuestions(loadTeacherQuestions(activeTeacherId));
-      setClasses(loadTeacherClasses(activeTeacherId));
-      setActivities(loadTeacherActivities(activeTeacherId));
-      setHistory(loadTeacherHistory(activeTeacherId));
-      setSettings(loadTeacherSettings(activeTeacherId));
-      prevTeacherIdRef.current = activeTeacherId;
-    }
-  }, [activeTeacherId]);
-
-  // Fetch active teacher's isolated datasets from Cloud in background
-  useEffect(() => {
-    if (!activeTeacherId) return;
+    if (!authUser || !activeTeacherId) return;
     let isCancelled = false;
+    setIsCloudLoading(true);
+    setCloudSyncError(null);
 
-    // Fetch questions from Cloud
-    fetchQuestionsFromCloud(activeTeacherId).then(cloudQuestions => {
+    Promise.all([
+      fetchQuestionsFromCloud(activeTeacherId),
+      fetchClassesFromCloud(activeTeacherId),
+      fetchActivitiesFromCloud(activeTeacherId),
+      fetchHistoryFromCloud(activeTeacherId),
+      fetchSettingsFromCloud(activeTeacherId),
+    ]).then(([qRes, cRes, aRes, hRes, sRes]) => {
       if (isCancelled) return;
-      if (cloudQuestions && cloudQuestions.length > 0) {
-        setQuestions(cloudQuestions);
-      } else if (questions.length > 0) {
-        syncQuestionsToCloud(activeTeacherId, questions);
-      }
-    });
 
-    // Fetch classes from Cloud
-    fetchClassesFromCloud(activeTeacherId).then(cloudClasses => {
-      if (isCancelled) return;
-      if (cloudClasses && cloudClasses.length > 0) {
-        setClasses(cloudClasses);
-      } else if (classes.length > 0) {
-        syncClassesToCloud(activeTeacherId, classes);
-      }
-    });
-
-    // Fetch activities from Cloud
-    fetchActivitiesFromCloud(activeTeacherId).then(cloudActivities => {
-      if (isCancelled) return;
-      if (cloudActivities && cloudActivities.length > 0) {
-        setActivities(cloudActivities);
-      } else if (activities.length > 0) {
-        syncActivitiesToCloud(activeTeacherId, activities);
-      }
-    });
-
-    // Fetch history from Cloud
-    fetchHistoryFromCloud(activeTeacherId).then(cloudHistory => {
-      if (isCancelled) return;
-      if (cloudHistory && cloudHistory.length > 0) {
-        setHistory(cloudHistory);
-      } else if (history.length > 0) {
-        syncHistoryToCloud(activeTeacherId, history);
-      }
-    });
-
-    // Fetch settings from Cloud
-    fetchSettingsFromCloud(activeTeacherId).then(cloudSettings => {
-      if (isCancelled) return;
-      if (cloudSettings) {
-        setSettings(cloudSettings);
+      if (qRes.error || cRes.error || aRes.error) {
+        setCloudSyncError('تعذر الاتصال بالسحابة لجلب بعض البيانات، يرجى التحقق من اتصال الإنترنت.');
       } else {
-        syncSettingsToCloud(activeTeacherId, settings);
+        setCloudSyncError(null);
       }
+
+      if (qRes.data !== null) {
+        setQuestions(qRes.data);
+      }
+      if (cRes.data !== null) {
+        setClasses(cRes.data);
+      }
+      if (aRes.data !== null) {
+        setActivities(aRes.data);
+      }
+      if (hRes.data !== null) {
+        setHistory(hRes.data);
+      }
+      if (sRes.data !== null) {
+        setSettings(sRes.data);
+      }
+
+      loadedTeacherIdRef.current = activeTeacherId;
+      setIsCloudLoading(false);
+    }).catch(err => {
+      if (isCancelled) return;
+      console.error('[Cloud Load Error]', err);
+      setCloudSyncError('حدث خطأ أثناء تحميل البيانات من الخادم السحابي.');
+      setIsCloudLoading(false);
     });
 
     return () => {
       isCancelled = true;
     };
-  }, [activeTeacherId]);
-
-  // Persist datasets to current teacher's storage key and Cloud
-  useEffect(() => {
-    if (!activeTeacherId) return;
-    try {
-      const keys = getTeacherDataKeys(activeTeacherId);
-      localStorage.setItem(keys.QUESTIONS, JSON.stringify(questions));
-      syncQuestionsToCloud(activeTeacherId, questions);
-    } catch (e) {
-      console.error(e);
-    }
-  }, [questions, activeTeacherId]);
-
-  useEffect(() => {
-    if (!activeTeacherId) return;
-    try {
-      const keys = getTeacherDataKeys(activeTeacherId);
-      localStorage.setItem(keys.CLASSES, JSON.stringify(classes));
-      syncClassesToCloud(activeTeacherId, classes);
-    } catch (e) {
-      console.error(e);
-    }
-  }, [classes, activeTeacherId]);
-
-  useEffect(() => {
-    if (!activeTeacherId) return;
-    try {
-      const keys = getTeacherDataKeys(activeTeacherId);
-      localStorage.setItem(keys.ACTIVITIES, JSON.stringify(activities));
-      syncActivitiesToCloud(activeTeacherId, activities);
-    } catch (e) {
-      console.error(e);
-    }
-  }, [activities, activeTeacherId]);
-
-  useEffect(() => {
-    if (!activeTeacherId) return;
-    try {
-      const keys = getTeacherDataKeys(activeTeacherId);
-      localStorage.setItem(keys.HISTORY, JSON.stringify(history));
-      syncHistoryToCloud(activeTeacherId, history);
-    } catch (e) {
-      console.error(e);
-    }
-  }, [history, activeTeacherId]);
-
-  useEffect(() => {
-    if (!activeTeacherId) return;
-    try {
-      const keys = getTeacherDataKeys(activeTeacherId);
-      localStorage.setItem(keys.SETTINGS, JSON.stringify(settings));
-      syncSettingsToCloud(activeTeacherId, settings);
-    } catch (e) {
-      console.error(e);
-    }
-  }, [settings, activeTeacherId]);
+  }, [authUser, activeTeacherId]);
 
   // Sync settings with audio and document theme
   useEffect(() => {
@@ -534,69 +351,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
+    await logoutFirebaseAuth();
     setAuthUser(null);
+    loadedTeacherIdRef.current = null;
     try {
       localStorage.removeItem(STORAGE_KEYS.AUTH);
-      localStorage.removeItem(STORAGE_KEYS.LEGACY_AUTH);
     } catch (e) {
       console.error(e);
     }
   };
 
   const loginWithCredentials = async (username: string, password: string): Promise<{ success: boolean; error?: string; user?: AuthUser }> => {
-    const cleanUser = username.trim().toLowerCase();
-    const cleanPass = password.trim();
+    const authResult = await loginWithFirebaseAuth(username, password);
+    if (!authResult.success) {
+      return { success: false, error: authResult.error || 'اسم المستخدم أو كلمة المرور غير صحيحة' };
+    }
 
-    let foundTeacher = teachers.find(
-      t => t.username.trim().toLowerCase() === cleanUser && t.password === cleanPass
+    const firebaseUser = authResult.user;
+    const cloudTeachers = await fetchTeachersFromCloud();
+    const matched = cloudTeachers?.find(t => 
+      (firebaseUser && t.uid === firebaseUser.uid) ||
+      t.username.trim().toLowerCase() === username.trim().toLowerCase() ||
+      (t.email && firebaseUser?.email && t.email.toLowerCase() === firebaseUser.email.toLowerCase())
     );
 
-    // If not found in local memory, check live Cloud Database
-    if (!foundTeacher) {
-      try {
-        const cloudTeachers = await fetchTeachersFromCloud();
-        if (cloudTeachers) {
-          const match = cloudTeachers.find(
-            t => t.username.trim().toLowerCase() === cleanUser && t.password === cleanPass
-          );
-          if (match) {
-            foundTeacher = match;
-            setTeachers(prev => {
-              const map = new Map<string, TeacherAccount>();
-              [...prev, match].forEach(t => map.set(t.id, t));
-              return Array.from(map.values());
-            });
-          }
-        }
-      } catch {
-        // ignore
-      }
-    }
-
-    if (!foundTeacher) {
-      return { success: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة' };
-    }
-
+    const isMasterEmail = firebaseUser?.email === 'abanoub.iskander77@gmail.com';
     const authData: AuthUser = {
-      id: foundTeacher.id,
-      username: foundTeacher.username,
-      fullName: foundTeacher.fullName,
-      subject: foundTeacher.subject,
-      role: foundTeacher.role || 'teacher',
+      id: matched?.id || firebaseUser?.uid || 'teacher_master_default',
+      uid: firebaseUser?.uid,
+      email: firebaseUser?.email || undefined,
+      username: matched?.username || username.trim(),
+      fullName: matched?.fullName || (isMasterEmail ? 'أبانوب وجيه' : 'الأستاذ'),
+      subject: matched?.subject || 'حاسب آلي وتكنولوجيا',
+      role: isMasterEmail ? 'admin' : (matched?.role || 'teacher'),
     };
 
     login(authData);
     return { success: true, user: authData };
   };
 
+  const requestPasswordReset = async (usernameOrEmail: string): Promise<{ success: boolean; error?: string }> => {
+    return await requestPasswordResetEmail(usernameOrEmail);
+  };
+
   // Teacher Accounts Management
-  const addTeacherAccount = (data: { fullName: string; subject: string; username: string; password: string }) => {
-    // Only the master admin (أبانوب وجيه) is allowed to add teachers
+  const addTeacherAccount = async (data: { fullName: string; subject: string; username: string; password: string }) => {
     if (authUser?.role !== 'admin') {
       return { 
         success: false, 
-        error: 'صلاحية إضافة معلمين جدد مقتصرة فقط على الحساب الأساسي للمنصة (أبانوب وجيه).' 
+        error: 'صلاحية إضافة معلمين جدد مقتصرة فقط على الحساب الإداري.' 
       };
     }
 
@@ -608,45 +412,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!cleanName) return { success: false, error: 'يرجى إدخال اسم المعلم' };
     if (!cleanSub) return { success: false, error: 'يرجى إدخال اسم المادة الدراسية للمعلم' };
     if (!cleanUser) return { success: false, error: 'يرجى إدخال اسم المستخدم' };
-    if (!cleanPass || cleanPass.length < 3) return { success: false, error: 'كلمة المرور يجب أن تكون 3 خانات على الأقل' };
+    if (!cleanPass || cleanPass.length < 6) {
+      return { success: false, error: 'كلمة المرور يجب أن تكون 6 أحرف أو أرقام على الأقل' };
+    }
 
-    // Check duplicate username
     const exists = teachers.some(t => t.username.trim().toLowerCase() === cleanUser);
     if (exists) {
-      return { success: false, error: 'اسم المستخدم هذا مستخدم بالفعل لمعلم آخر، يرجى اختيار اسم مستخدم مختلف' };
+      return { success: false, error: 'اسم المستخدم هذا مستخدم بالفعل لمعلم آخر' };
     }
 
-    const newTeacher: TeacherAccount = {
-      id: `teacher_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      username: data.username.trim(),
-      password: cleanPass,
+    const res = await createFirebaseAuthTeacher({
+      username: cleanUser,
       fullName: cleanName,
       subject: cleanSub,
+      password: cleanPass,
       role: 'teacher',
-      createdAt: new Date().toISOString(),
-      isDefault: false,
-    };
+    });
 
-    // Initialize fresh empty storage for the new teacher
-    try {
-      const keys = getTeacherDataKeys(newTeacher.id);
-      localStorage.setItem(keys.QUESTIONS, JSON.stringify([]));
-      localStorage.setItem(keys.CLASSES, JSON.stringify([]));
-      localStorage.setItem(keys.ACTIVITIES, JSON.stringify([]));
-      localStorage.setItem(keys.HISTORY, JSON.stringify([]));
-      localStorage.setItem(keys.SETTINGS, JSON.stringify(DEFAULT_SETTINGS));
-    } catch (e) {
-      console.error(e);
+    if (res.success && res.teacher) {
+      setTeachers(prev => [...prev, res.teacher!]);
+      soundEngine.playVictory();
+      return { success: true, teacher: res.teacher };
+    } else {
+      return { success: false, error: res.error || 'تعذر إنشاء حساب المعلم في Firebase Auth' };
     }
-
-    setTeachers(prev => [...prev, newTeacher]);
-    syncTeacherToCloud(newTeacher);
-    soundEngine.playVictory();
-    return { success: true, teacher: newTeacher };
   };
 
-  const updateTeacherAccount = (id: string, data: Partial<TeacherAccount>) => {
-    // Only master admin can edit other teachers. A regular teacher can only update their own account info.
+  const updateTeacherAccount = async (id: string, data: Partial<TeacherAccount>) => {
     if (authUser?.role !== 'admin' && authUser?.id !== id) {
       return { 
         success: false, 
@@ -657,18 +449,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const target = teachers.find(t => t.id === id);
     if (!target) return { success: false, error: 'المعلم غير موجود' };
 
-    if (data.username) {
-      const cleanUser = data.username.trim().toLowerCase();
-      const conflict = teachers.some(t => t.id !== id && t.username.trim().toLowerCase() === cleanUser);
-      if (conflict) {
-        return { success: false, error: 'اسم المستخدم مأخوذ بالفعل لمعلم آخر' };
-      }
-    }
-
-    // Regular teacher cannot change their own role to admin
+    // Prevent privilege escalation: Regular teachers cannot grant admin role
     const safeData = { ...data };
     if (authUser?.role !== 'admin') {
       delete safeData.role;
+    }
+
+    // If password provided and it's the current user, update via Firebase Auth
+    if (safeData.password && authUser?.id === id) {
+      const passRes = await updateUserPasswordInAuth(safeData.password);
+      if (!passRes.success) {
+        return { success: false, error: passRes.error };
+      }
     }
 
     const updatedTeacher: TeacherAccount = {
@@ -677,20 +469,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       username: safeData.username ? safeData.username.trim() : target.username,
       fullName: safeData.fullName ? safeData.fullName.trim() : target.fullName,
       subject: safeData.subject ? safeData.subject.trim() : target.subject,
-      password: safeData.password ? safeData.password.trim() : target.password,
+      updatedAt: new Date().toISOString(),
     };
+    // Strip password from Firestore save
+    delete updatedTeacher.password;
 
-    setTeachers(prev =>
-      prev.map(t => {
-        if (t.id !== id) return t;
-        return updatedTeacher;
-      })
-    );
+    setTeachers(prev => prev.map(t => (t.id === id ? updatedTeacher : t)));
+    await syncTeacherToCloud(updatedTeacher);
 
-    // Save to Cloud immediately
-    syncTeacherToCloud(updatedTeacher);
-
-    // If currently logged in as this teacher, update authUser as well
     if (authUser && authUser.id === id) {
       const updatedAuth: AuthUser = {
         ...authUser,
@@ -710,12 +496,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  const deleteTeacherAccount = (id: string) => {
-    // Only master admin can delete accounts
+  const deleteTeacherAccount = async (id: string) => {
     if (authUser?.role !== 'admin') {
       return { 
         success: false, 
-        error: 'صلاحية حذف المعلمين مقتصرة فقط على الحساب الأساسي (أبانوب وجيه).' 
+        error: 'صلاحية حذف المعلمين مقتصرة فقط على الحساب الإداري.' 
       };
     }
 
@@ -723,7 +508,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (target?.isDefault || target?.role === 'admin' || id === 'teacher_master_default') {
       return { 
         success: false, 
-        error: 'لا يمكن حذف الحساب الأساسي للمنصة (أبانوب وجيه).' 
+        error: 'لا يمكن حذف الحساب الأساسي للمنصة.' 
       };
     }
 
@@ -731,24 +516,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'لا يمكن حذف الحساب، يجب أن يبقى معلم واحد على الأقل في النظام' };
     }
 
-    // Delete teacher's isolated storage
-    try {
-      const keys = getTeacherDataKeys(id);
-      localStorage.removeItem(keys.QUESTIONS);
-      localStorage.removeItem(keys.CLASSES);
-      localStorage.removeItem(keys.ACTIVITIES);
-      localStorage.removeItem(keys.HISTORY);
-      localStorage.removeItem(keys.SETTINGS);
-    } catch {
-      // ignore
-    }
-
-    // Delete from Cloud
-    deleteTeacherFromCloud(id);
-
+    await deleteTeacherFromCloud(id);
     setTeachers(prev => prev.filter(t => t.id !== id));
 
-    // If deleted current active teacher, log out or switch to remaining teacher
     if (authUser?.id === id) {
       const remaining = teachers.filter(t => t.id !== id);
       if (remaining.length > 0) {
@@ -784,17 +554,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   };
 
-  // Backwards compatibility for single teacher credentials
   const teacherCredentials: TeacherCredentials = {
-    username: activeTeacher?.username || 'admin',
-    password: activeTeacher?.password || 'admin123',
-    fullName: activeTeacher?.fullName || 'الأستاذ المسؤول',
-    subject: activeTeacher?.subject || 'حاسب آلي وتكنولوجيا',
+    username: activeTeacher?.username || authUser?.username || 'admin',
+    fullName: activeTeacher?.fullName || authUser?.fullName || 'الأستاذ المسؤول',
+    subject: activeTeacher?.subject || authUser?.subject || 'حاسب آلي وتكنولوجيا',
   };
 
-  const updateTeacherCredentials = (newCreds: { username: string; password?: string; fullName?: string; subject?: string }) => {
+  const updateTeacherCredentials = async (newCreds: { username: string; password?: string; fullName?: string; subject?: string }) => {
     if (!activeTeacher) return false;
-    const res = updateTeacherAccount(activeTeacher.id, {
+    const res = await updateTeacherAccount(activeTeacher.id, {
       username: newCreds.username,
       password: newCreds.password,
       fullName: newCreds.fullName,
@@ -814,30 +582,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     soundEngine.playClick();
   };
 
-  // Questions CRUD (Stored in active teacher's isolated state)
+  // Safe CRUD Mutations with Instant Firestore Sync
   const addQuestion = (q: Omit<Question, 'id' | 'createdAt'>) => {
     const newQuestion: Question = {
       ...q,
       id: 'q-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
       createdAt: new Date().toISOString(),
     };
-    setQuestions(prev => [newQuestion, ...prev]);
+    const updated = [newQuestion, ...questions];
+    setQuestions(updated);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncQuestionsToCloud(activeTeacherId, updated);
+    }
     soundEngine.playCorrect();
   };
 
   const updateQuestion = (q: Question) => {
-    setQuestions(prev => prev.map(item => (item.id === q.id ? q : item)));
+    const updated = questions.map(item => (item.id === q.id ? q : item));
+    setQuestions(updated);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncQuestionsToCloud(activeTeacherId, updated);
+    }
     soundEngine.playClick();
   };
 
   const deleteQuestion = (id: string) => {
-    setQuestions(prev => prev.filter(item => item.id !== id));
-    setActivities(prev =>
-      prev.map(act => ({
+    const updated = questions.filter(item => item.id !== id);
+    setQuestions(updated);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncQuestionsToCloud(activeTeacherId, updated);
+    }
+    setActivities(prev => {
+      const updatedActs = prev.map(act => ({
         ...act,
         questionIds: act.questionIds.filter(qid => qid !== id),
-      }))
-    );
+      }));
+      if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+        syncActivitiesToCloud(activeTeacherId, updatedActs);
+      }
+      return updatedActs;
+    });
     soundEngine.playClick();
   };
 
@@ -848,12 +632,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `q-imp-${Date.now()}-${idx}`,
       createdAt: timestamp,
     }));
-    setQuestions(prev => [...formatted, ...prev]);
+    const updated = [...formatted, ...questions];
+    setQuestions(updated);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncQuestionsToCloud(activeTeacherId, updated);
+    }
     soundEngine.playVictory();
     return formatted.length;
   };
 
-  // Classes CRUD (Stored in active teacher's isolated state)
+  // Classes CRUD
   const addClass = (input: string | Partial<ClassroomGroup>, description?: string) => {
     let newClass: ClassroomGroup;
     if (typeof input === 'string') {
@@ -875,21 +663,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createdAt: new Date().toISOString(),
       };
     }
-    setClasses(prev => [newClass, ...prev]);
+    const updated = [newClass, ...classes];
+    setClasses(updated);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncClassesToCloud(activeTeacherId, updated);
+    }
     soundEngine.playClick();
     return newClass;
   };
 
   const updateClass = (cls: ClassroomGroup) => {
-    setClasses(prev => prev.map(c => (c.id === cls.id ? cls : c)));
+    const updated = classes.map(c => (c.id === cls.id ? cls : c));
+    setClasses(updated);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncClassesToCloud(activeTeacherId, updated);
+    }
     soundEngine.playClick();
   };
 
   const deleteClass = (id: string) => {
-    setClasses(prev => prev.filter(c => c.id !== id));
-    setActivities(prev =>
-      prev.map(act => (act.classId === id ? { ...act, classId: undefined } : act))
-    );
+    const updated = classes.filter(c => c.id !== id);
+    setClasses(updated);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncClassesToCloud(activeTeacherId, updated);
+    }
+    setActivities(prev => {
+      const updatedActs = prev.map(act => (act.classId === id ? { ...act, classId: undefined } : act));
+      if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+        syncActivitiesToCloud(activeTeacherId, updatedActs);
+      }
+      return updatedActs;
+    });
     soundEngine.playClick();
   };
 
@@ -901,15 +705,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       points: 0,
       timesCalled: 0,
     };
-    setClasses(prev =>
-      prev.map(c => {
-        if (c.id !== classId) return c;
-        return {
-          ...c,
-          students: [...c.students, newStudent],
-        };
-      })
-    );
+    const updated = classes.map(c => {
+      if (c.id !== classId) return c;
+      return {
+        ...c,
+        students: [...c.students, newStudent],
+      };
+    });
+    setClasses(updated);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncClassesToCloud(activeTeacherId, updated);
+    }
     soundEngine.playClick();
   };
 
@@ -924,32 +730,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       timesCalled: 0,
     }));
 
-    setClasses(prev =>
-      prev.map(c => {
-        if (c.id !== classId) return c;
-        return {
-          ...c,
-          students: [...c.students, ...newStudents],
-        };
-      })
-    );
+    const updated = classes.map(c => {
+      if (c.id !== classId) return c;
+      return {
+        ...c,
+        students: [...c.students, ...newStudents],
+      };
+    });
+    setClasses(updated);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncClassesToCloud(activeTeacherId, updated);
+    }
     soundEngine.playCorrect();
   };
 
   const removeStudentFromClass = (classId: string, studentId: string) => {
-    setClasses(prev =>
-      prev.map(c => {
-        if (c.id !== classId) return c;
-        return {
-          ...c,
-          students: c.students.filter(s => s.id !== studentId),
-        };
-      })
-    );
+    const updated = classes.map(c => {
+      if (c.id !== classId) return c;
+      return {
+        ...c,
+        students: c.students.filter(s => s.id !== studentId),
+      };
+    });
+    setClasses(updated);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncClassesToCloud(activeTeacherId, updated);
+    }
     soundEngine.playClick();
   };
 
-  // Activities CRUD (Stored in active teacher's isolated state)
+  // Activities CRUD
   const addActivity = (act: Omit<ActivityConfig, 'id' | 'createdAt' | 'updatedAt'>) => {
     const newActivity: ActivityConfig = {
       ...act,
@@ -957,22 +767,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    setActivities(prev => [newActivity, ...prev]);
+    const updated = [newActivity, ...activities];
+    setActivities(updated);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncActivitiesToCloud(activeTeacherId, updated);
+    }
     soundEngine.playVictory();
     return newActivity;
   };
 
   const updateActivity = (act: ActivityConfig) => {
-    setActivities(prev =>
-      prev.map(item =>
-        item.id === act.id ? { ...act, updatedAt: new Date().toISOString() } : item
-      )
+    const updated = activities.map(item =>
+      item.id === act.id ? { ...act, updatedAt: new Date().toISOString() } : item
     );
+    setActivities(updated);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncActivitiesToCloud(activeTeacherId, updated);
+    }
     soundEngine.playClick();
   };
 
   const deleteActivity = (id: string) => {
-    setActivities(prev => prev.filter(a => a.id !== id));
+    const updated = activities.filter(a => a.id !== id);
+    setActivities(updated);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncActivitiesToCloud(activeTeacherId, updated);
+    }
     soundEngine.playClick();
   };
 
@@ -986,11 +806,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    setActivities(prev => [duplicated, ...prev]);
+    const updated = [duplicated, ...activities];
+    setActivities(updated);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncActivitiesToCloud(activeTeacherId, updated);
+    }
     soundEngine.playClick();
   };
 
-  // History (Stored in active teacher's isolated state)
+  // History CRUD
   const addSessionResult = (result: Omit<ActivitySessionResult, 'id' | 'timestamp'>) => {
     const newResult: ActivitySessionResult = {
       ...result,
@@ -998,31 +822,123 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       timestamp: new Date().toISOString(),
       completedAt: new Date().toISOString(),
     };
-    setHistory(prev => [newResult, ...prev]);
+    const updated = [newResult, ...history];
+    setHistory(updated);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncHistoryToCloud(activeTeacherId, updated);
+    }
   };
 
   const deleteHistoryItem = (id: string) => {
-    setHistory(prev => prev.filter(h => h.id !== id));
+    const updated = history.filter(h => h.id !== id);
+    setHistory(updated);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncHistoryToCloud(activeTeacherId, updated);
+    }
     soundEngine.playClick();
   };
 
   const clearHistory = () => {
     setHistory([]);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncHistoryToCloud(activeTeacherId, []);
+    }
     soundEngine.playClick();
   };
 
   // Settings
   const updateSettings = (newSettings: Partial<AppSettings>) => {
-    setSettings(prev => ({ ...prev, ...newSettings }));
+    const updated = { ...settings, ...newSettings };
+    setSettings(updated);
+    if (activeTeacherId && loadedTeacherIdRef.current === activeTeacherId) {
+      syncSettingsToCloud(activeTeacherId, updated);
+    }
   };
 
   const resetAllToDefaults = () => {
+    if (!activeTeacherId) return;
     setQuestions([]);
     setClasses([]);
     setActivities([]);
     setHistory([]);
     setSettings(DEFAULT_SETTINGS);
+    // Explicitly allow empty arrays for authorized reset
+    syncQuestionsToCloud(activeTeacherId, [], { allowEmpty: true });
+    syncClassesToCloud(activeTeacherId, [], { allowEmpty: true });
+    syncActivitiesToCloud(activeTeacherId, [], { allowEmpty: true });
+    syncHistoryToCloud(activeTeacherId, []);
+    syncSettingsToCloud(activeTeacherId, DEFAULT_SETTINGS);
     soundEngine.playClick();
+  };
+
+  // Backup & Recovery Handlers
+  const exportAllDataAsJSON = () => {
+    if (!activeTeacher) return;
+    const backupPayload = {
+      app: 'WE Interactive Platform',
+      version: '2.0.0',
+      exportedAt: new Date().toISOString(),
+      teacher: {
+        id: activeTeacher.id,
+        username: activeTeacher.username,
+        fullName: activeTeacher.fullName,
+        subject: activeTeacher.subject,
+        role: activeTeacher.role,
+      },
+      questions,
+      classes,
+      activities,
+      history,
+      settings,
+    };
+
+    const dataBlob = new Blob([JSON.stringify(backupPayload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(dataBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `we_backup_${activeTeacher.username}_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    soundEngine.playVictory();
+  };
+
+  const importDataFromJSON = async (jsonStr: string): Promise<{ success: boolean; error?: string }> => {
+    if (!activeTeacherId) return { success: false, error: 'لم يتم تسجيل الدخول' };
+    try {
+      const parsed = JSON.parse(jsonStr);
+      if (!parsed || typeof parsed !== 'object') {
+        return { success: false, error: 'الملف غير صالح أو تالف' };
+      }
+
+      if (Array.isArray(parsed.questions)) {
+        setQuestions(parsed.questions);
+        await syncQuestionsToCloud(activeTeacherId, parsed.questions, { allowEmpty: true });
+      }
+      if (Array.isArray(parsed.classes)) {
+        setClasses(parsed.classes);
+        await syncClassesToCloud(activeTeacherId, parsed.classes, { allowEmpty: true });
+      }
+      if (Array.isArray(parsed.activities)) {
+        setActivities(parsed.activities);
+        await syncActivitiesToCloud(activeTeacherId, parsed.activities, { allowEmpty: true });
+      }
+      if (Array.isArray(parsed.history)) {
+        setHistory(parsed.history);
+        await syncHistoryToCloud(activeTeacherId, parsed.history);
+      }
+      if (parsed.settings && typeof parsed.settings === 'object') {
+        const newSettings = { ...DEFAULT_SETTINGS, ...parsed.settings };
+        setSettings(newSettings);
+        await syncSettingsToCloud(activeTeacherId, newSettings);
+      }
+
+      soundEngine.playCorrect();
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: 'تعذر معالجة ملف النسخ الاحتياطي: ' + (e?.message || '') };
+    }
   };
 
   return (
@@ -1033,11 +949,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         authUser,
         activeTeacher,
         teachers,
+        isCloudLoading,
+        cloudSyncError,
         addTeacherAccount,
         updateTeacherAccount,
         deleteTeacherAccount,
         switchTeacherAccount,
         loginWithCredentials,
+        requestPasswordReset,
         teacherCredentials,
         updateTeacherCredentials,
         login,
@@ -1050,6 +969,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeActivity,
         launchActivity,
         exitActivity,
+        exportAllDataAsJSON,
+        importDataFromJSON,
         addQuestion,
         updateQuestion,
         deleteQuestion,
@@ -1072,6 +993,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         resetAllData: resetAllToDefaults,
       }}
     >
+      {/* Cloud Sync Warning Banner if offline or error */}
+      {cloudSyncError && (
+        <div className="fixed top-2 left-1/2 -translate-x-1/2 z-50 bg-rose-600 text-white text-xs font-bold px-4 py-2 rounded-xl shadow-lg flex items-center gap-2 animate-bounce">
+          <span>⚠️</span>
+          <span>{cloudSyncError}</span>
+          <button 
+            type="button" 
+            onClick={() => setCloudSyncError(null)} 
+            className="ml-2 hover:opacity-75"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {children}
     </AppContext.Provider>
   );

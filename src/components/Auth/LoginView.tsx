@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Lock, User, Eye, EyeOff, LogIn } from 'lucide-react';
+import { Lock, User, Eye, EyeOff, LogIn, KeyRound, Check, ArrowRight } from 'lucide-react';
 import { soundEngine } from '../../utils/audio';
 import { AuthUser } from '../../types';
 import { WeLogo } from '../common/WeLogo';
@@ -10,13 +10,19 @@ interface LoginViewProps {
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
-  const { loginWithCredentials } = useApp();
+  const { loginWithCredentials, requestPasswordReset } = useApp();
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+
+  // Forgot password modal state
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [forgotInput, setForgotInput] = useState('');
+  const [forgotStatus, setForgotStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [isResetting, setIsResetting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,7 +32,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
     const enteredPass = password.trim();
 
     if (!enteredUser) {
-      setError('يرجى إدخال اسم المستخدم');
+      setError('يرجى إدخال اسم المستخدم أو البريد الإلكتروني');
       soundEngine.playWrong();
       return;
     }
@@ -54,6 +60,35 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
       soundEngine.playWrong();
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleForgotSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotStatus(null);
+    if (!forgotInput.trim()) {
+      setForgotStatus({ type: 'error', message: 'يرجى إدخال اسم المستخدم أو البريد المسجل' });
+      return;
+    }
+
+    setIsResetting(true);
+    soundEngine.playClick();
+
+    const res = await requestPasswordReset(forgotInput.trim());
+    setIsResetting(false);
+
+    if (res.success) {
+      setForgotStatus({
+        type: 'success',
+        message: 'تم إرسال رابط إعادة تعيين كلمة المرور إلى البريد المرتبط بالحساب بنجاح.'
+      });
+      soundEngine.playCorrect();
+    } else {
+      setForgotStatus({
+        type: 'error',
+        message: res.error || 'تعذر إرسال رابط إعادة التعيين، يرجى مراجعة المسؤول.'
+      });
+      soundEngine.playWrong();
     }
   };
 
@@ -97,14 +132,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-              اسم المستخدم (Username)
+              اسم المستخدم أو البريد الإلكتروني
             </label>
             <div className="relative">
               <input
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="أدخل اسم المستخدم"
+                placeholder="أدخل اسم المستخدم أو البريد"
                 className="w-full pl-4 pr-10 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/60 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#5B2D82] focus:bg-white dark:focus:bg-slate-800 transition-all font-medium"
                 required
                 autoComplete="username"
@@ -116,9 +151,22 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-              كلمة المرور (Password)
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                كلمة المرور
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  setForgotInput(username);
+                  setForgotStatus(null);
+                  setShowForgotModal(true);
+                }}
+                className="text-[11px] text-[#5B2D82] dark:text-purple-400 hover:underline cursor-pointer font-semibold"
+              >
+                نسيت كلمة المرور؟
+              </button>
+            </div>
             <div className="relative">
               <input
                 type={showPassword ? 'text' : 'password'}
@@ -167,6 +215,72 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
           </p>
         </div>
       </div>
+
+      {/* Forgot Password Modal */}
+      {showForgotModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-sm w-full p-5 space-y-4" dir="rtl">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <KeyRound className="w-4 h-4 text-[#5B2D82] dark:text-purple-400" />
+                <span>إعادة تعيين كلمة المرور</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowForgotModal(false)}
+                className="w-7 h-7 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 flex items-center justify-center cursor-pointer text-xs"
+              >
+                ✕
+              </button>
+            </div>
+
+            {forgotStatus && (
+              <div
+                className={`p-3 rounded-xl text-xs font-semibold ${
+                  forgotStatus.type === 'success'
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                    : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                }`}
+              >
+                {forgotStatus.message}
+              </div>
+            )}
+
+            <form onSubmit={handleForgotSubmit} className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  اسم المستخدم أو البريد المسجل
+                </label>
+                <input
+                  type="text"
+                  value={forgotInput}
+                  onChange={(e) => setForgotInput(e.target.value)}
+                  placeholder="أدخل اسم المستخدم أو البريد"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-[#5B2D82]"
+                  required
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowForgotModal(false)}
+                  className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  disabled={isResetting}
+                  className="px-4 py-2 rounded-xl bg-[#5B2D82] text-white text-xs font-bold cursor-pointer disabled:opacity-50"
+                >
+                  {isResetting ? 'جارٍ الإرسال...' : 'إرسال رابط التعيين'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { 
   Settings, Volume2, VolumeX, Sun, Moon, 
   RotateCcw, Sparkles, Sliders, ShieldCheck, UserCheck, Trash2,
   KeyRound, Check, AlertCircle, Eye, EyeOff, Save, LogOut,
-  UserPlus, Edit3, ArrowRightLeft, BookOpen, Layers
+  UserPlus, Edit3, ArrowRightLeft, BookOpen, Layers,
+  Download, Upload, Shield, Database
 } from 'lucide-react';
 import { soundEngine } from '../../utils/audio';
 import { TeacherAccount } from '../../types';
@@ -22,7 +23,9 @@ export const SettingsView: React.FC = () => {
     deleteTeacherAccount,
     switchTeacherAccount,
     teacherCredentials, 
-    updateTeacherCredentials 
+    updateTeacherCredentials,
+    exportAllDataAsJSON,
+    importDataFromJSON,
   } = useApp();
 
   // Current Teacher Credentials form state
@@ -34,6 +37,10 @@ export const SettingsView: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [credMessage, setCredMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isSavingCreds, setIsSavingCreds] = useState(false);
+
+  // Backup & Import state
+  const [backupMessage, setBackupMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // New Teacher Modal State
   const [showAddTeacherModal, setShowAddTeacherModal] = useState(false);
@@ -74,7 +81,7 @@ export const SettingsView: React.FC = () => {
     soundEngine.playClick();
   };
 
-  const handleSaveCredentials = (e: React.FormEvent) => {
+  const handleSaveCredentials = async (e: React.FormEvent) => {
     e.preventDefault();
     setCredMessage(null);
 
@@ -88,8 +95,8 @@ export const SettingsView: React.FC = () => {
       return;
     }
 
-    if (credPassword && credPassword.length < 3) {
-      setCredMessage({ type: 'error', text: 'كلمة المرور يجب أن تكون 3 أحرف أو أرقام على الأقل' });
+    if (credPassword && credPassword.length < 6) {
+      setCredMessage({ type: 'error', text: 'كلمة المرور يجب أن تكون 6 أحرف أو أرقام على الأقل' });
       soundEngine.playWrong();
       return;
     }
@@ -103,8 +110,8 @@ export const SettingsView: React.FC = () => {
     setIsSavingCreds(true);
     soundEngine.playClick();
 
-    setTimeout(() => {
-      const ok = updateTeacherCredentials({
+    try {
+      const ok = await updateTeacherCredentials({
         username: cleanUser,
         fullName: cleanName || cleanUser,
         subject: cleanSub,
@@ -116,18 +123,22 @@ export const SettingsView: React.FC = () => {
         setCredConfirmPassword('');
         setCredMessage({ 
           type: 'success', 
-          text: 'تم حفظ وتحديث بيانات حسابك ومادتك بنجاح!' 
+          text: 'تم حفظ وتحديث بيانات حسابك وتشفير كلمة المرور بنجاح!' 
         });
         soundEngine.playCorrect();
       } else {
         setCredMessage({ type: 'error', text: 'حدث خطأ أثناء حفظ البيانات' });
         soundEngine.playWrong();
       }
+    } catch {
+      setCredMessage({ type: 'error', text: 'تعذر الاتصال بـ Firebase Auth' });
+      soundEngine.playWrong();
+    } finally {
       setIsSavingCreds(false);
-    }, 250);
+    }
   };
 
-  const handleCreateTeacher = (e: React.FormEvent) => {
+  const handleCreateTeacher = async (e: React.FormEvent) => {
     e.preventDefault();
     setAddTeacherError(null);
     setAddTeacherSuccess(null);
@@ -147,8 +158,8 @@ export const SettingsView: React.FC = () => {
       soundEngine.playWrong();
       return;
     }
-    if (!newTeacherPass || newTeacherPass.length < 3) {
-      setAddTeacherError('كلمة المرور يجب أن تكون 3 خانات على الأقل');
+    if (!newTeacherPass || newTeacherPass.length < 6) {
+      setAddTeacherError('كلمة المرور يجب أن تكون 6 خانات على الأقل لـ Firebase Auth');
       soundEngine.playWrong();
       return;
     }
@@ -158,7 +169,7 @@ export const SettingsView: React.FC = () => {
       return;
     }
 
-    const res = addTeacherAccount({
+    const res = await addTeacherAccount({
       fullName: newTeacherName.trim(),
       subject: newTeacherSubject.trim(),
       username: newTeacherUser.trim(),
@@ -171,7 +182,7 @@ export const SettingsView: React.FC = () => {
       return;
     }
 
-    setAddTeacherSuccess(`تم إنشاء حساب (${newTeacherName} - مادة ${newTeacherSubject}) بنجاح! يمكنه الآن تسجيل الدخول.`);
+    setAddTeacherSuccess(`تم إنشاء حساب (${newTeacherName} - مادة ${newTeacherSubject}) وتأمينه بـ Firebase Auth بنجاح!`);
     soundEngine.playVictory();
 
     setTimeout(() => {
@@ -195,7 +206,7 @@ export const SettingsView: React.FC = () => {
     soundEngine.playClick();
   };
 
-  const handleSaveEdit = (e: React.FormEvent) => {
+  const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingTeacher) return;
 
@@ -212,7 +223,7 @@ export const SettingsView: React.FC = () => {
       return;
     }
 
-    const res = updateTeacherAccount(editingTeacher.id, {
+    const res = await updateTeacherAccount(editingTeacher.id, {
       fullName: editName.trim(),
       subject: editSubject.trim(),
       username: editUser.trim(),
@@ -229,8 +240,8 @@ export const SettingsView: React.FC = () => {
     soundEngine.playCorrect();
   };
 
-  const handleConfirmDelete = (id: string) => {
-    const res = deleteTeacherAccount(id);
+  const handleConfirmDelete = async (id: string) => {
+    const res = await deleteTeacherAccount(id);
     if (!res.success) {
       alert(res.error || 'لا يمكن حذف الحساب');
       soundEngine.playWrong();
@@ -238,6 +249,29 @@ export const SettingsView: React.FC = () => {
       soundEngine.playClick();
     }
     setDeletingTeacherId(null);
+  };
+
+  const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBackupMessage(null);
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        const result = await importDataFromJSON(text);
+        if (result.success) {
+          setBackupMessage({ type: 'success', text: 'تمت استعادة البيانات بنجاح ومزامنتها مع السحابة!' });
+        } else {
+          setBackupMessage({ type: 'error', text: result.error || 'فشلت استعادة البيانات' });
+        }
+      } catch {
+        setBackupMessage({ type: 'error', text: 'الملف غير صالح' });
+      }
+    };
+    reader.readAsText(file);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   return (
@@ -510,18 +544,18 @@ export const SettingsView: React.FC = () => {
 
             <div className="flex items-center justify-between pt-2">
               <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                * يتم حفظ بيانات الدخول محلياً على جهازك لتسجيل الدخول بأمان
+                * يتم تأمين وتشفير الحساب وكلمات المرور سحابياً عبر Firebase Authentication المشفر بأعلى المعايير.
               </span>
               <button
                 type="submit"
                 disabled={isSavingCreds}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-white text-xs font-bold shadow-md transition-all cursor-pointer active:scale-95"
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-white text-xs font-bold shadow-md transition-all cursor-pointer active:scale-95 disabled:opacity-50"
                 style={{
                   background: 'linear-gradient(135deg, #5B2D82 0%, #461b68 100%)',
                 }}
               >
                 <Save className="w-4 h-4" />
-                <span>حفظ التعديلات على حسابي</span>
+                <span>{isSavingCreds ? 'جارٍ الحفظ...' : 'حفظ التعديلات على حسابي'}</span>
               </button>
             </div>
           </form>
@@ -628,7 +662,54 @@ export const SettingsView: React.FC = () => {
           </div>
         </div>
 
-        {/* SECTION 5: DATA RESET FOR CURRENT TEACHER */}
+        {/* SECTION 5: DATA BACKUP AND EXPORT */}
+        <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-5 transition-colors">
+          <div className="flex items-center gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+            <div className="w-10 h-10 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+              <Database className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-slate-900 dark:text-white">النسخ الاحتياطي وحماية البيانات</h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">تصدير واستيراد نسخة احتياطية محلية متوافقة بصيغة JSON لبياناتك وأنشطتك</p>
+            </div>
+          </div>
+
+          {backupMessage && (
+            <div className={`p-3 rounded-xl text-xs font-semibold flex items-center gap-2 ${
+              backupMessage.type === 'success'
+                ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+            }`}>
+              <span>{backupMessage.type === 'success' ? '✓' : '⚠️'}</span>
+              <span>{backupMessage.text}</span>
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            <button
+              type="button"
+              onClick={exportAllDataAsJSON}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 text-white text-xs font-bold transition-all shadow-sm cursor-pointer"
+            >
+              <Download className="w-4 h-4 text-emerald-400" />
+              <span>تصدير نسخة احتياطية كاملة (JSON)</span>
+            </button>
+
+            <label className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200 text-xs font-bold transition-all cursor-pointer">
+              <Upload className="w-4 h-4 text-[#5B2D82] dark:text-purple-400" />
+              <span>استعادة نسخة احتياطية</span>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".json"
+                onChange={handleFileImport}
+                className="hidden"
+              />
+            </label>
+          </div>
+        </div>
+
+        {/* SECTION 6: DATA RESET FOR CURRENT TEACHER */}
         <div className="p-6 rounded-3xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/60 shadow-sm space-y-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-rose-100 dark:bg-rose-900/60 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
