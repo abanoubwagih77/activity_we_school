@@ -121,9 +121,9 @@ const getTeacherDataKeys = (teacherId: string) => ({
 // Non-sensitive structure without any hardcoded passwords
 const DEFAULT_MASTER_TEACHER: TeacherAccount = {
   id: 'teacher_master_default',
-  username: 'abanoub',
-  fullName: 'أبانوب وجيه',
-  subject: 'حاسب آلي وتكنولوجيا',
+  username: 'admin',
+  fullName: 'Eng. Abanoub Wagih',
+  subject: 'IT',
   role: 'admin',
   createdAt: new Date().toISOString(),
   isDefault: true,
@@ -149,7 +149,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const isMaster = t.isDefault || t.id === 'teacher_master_default' || index === 0;
             return {
               ...t,
-              fullName: isMaster && (t.fullName === 'الأستاذ المسؤول' || !t.fullName) ? 'أبانوب وجيه' : t.fullName,
+              fullName: t.fullName || (isMaster ? 'Eng. Abanoub Wagih' : 'المعلم'),
               role: isMaster ? ('admin' as const) : (t.role || 'teacher'),
               isDefault: isMaster ? true : false,
             };
@@ -192,6 +192,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     fetchTeachersFromCloud().then(cloudTeachers => {
       if (cloudTeachers && cloudTeachers.length > 0) {
         setTeachers(cloudTeachers);
+        // Synchronize authUser with fresh cloud profile if logged in
+        setAuthUser(curr => {
+          if (!curr) return null;
+          const fresh = cloudTeachers.find(t => 
+            t.id === curr.id || 
+            (t.uid && curr.uid && t.uid === curr.uid) ||
+            t.username.toLowerCase() === curr.username.toLowerCase()
+          );
+          if (fresh) {
+            const updated: AuthUser = {
+              ...curr,
+              fullName: fresh.fullName || curr.fullName,
+              subject: fresh.subject || curr.subject,
+              username: fresh.username || curr.username,
+              role: fresh.role || curr.role,
+            };
+            try {
+              localStorage.setItem(STORAGE_KEYS.AUTH, JSON.stringify(updated));
+            } catch (e) {
+              console.error(e);
+            }
+            return updated;
+          }
+          return curr;
+        });
       }
     });
 
@@ -206,7 +231,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           (t.email && t.email.toLowerCase() === firebaseUser.email?.toLowerCase())
         );
 
-        // Auto-assign admin if matching primary project email
         const isMasterAdminEmail = firebaseUser.email === 'abanoub.iskander77@gmail.com';
 
         if (matched) {
@@ -232,8 +256,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             uid: firebaseUser.uid,
             email: firebaseUser.email,
             username: firebaseUser.email.split('@')[0],
-            fullName: isMasterAdminEmail ? 'أبانوب وجيه' : (firebaseUser.displayName || firebaseUser.email.split('@')[0]),
-            subject: 'حاسب آلي وتكنولوجيا',
+            fullName: isMasterAdminEmail ? 'Eng. Abanoub Wagih' : (firebaseUser.displayName || firebaseUser.email.split('@')[0]),
+            subject: 'IT',
             role: isMasterAdminEmail ? 'admin' : 'teacher',
           };
           setAuthUser(fallbackUser);
@@ -370,21 +394,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const firebaseUser = authResult.user;
     const cloudTeachers = await fetchTeachersFromCloud();
+    if (cloudTeachers && cloudTeachers.length > 0) {
+      setTeachers(cloudTeachers);
+    }
+
     const matched = cloudTeachers?.find(t => 
       (firebaseUser && t.uid === firebaseUser.uid) ||
       t.username.trim().toLowerCase() === username.trim().toLowerCase() ||
       (t.email && firebaseUser?.email && t.email.toLowerCase() === firebaseUser.email.toLowerCase())
     );
 
-    const isMasterEmail = firebaseUser?.email === 'abanoub.iskander77@gmail.com';
+    const isMasterAdmin = matched?.role === 'admin' || matched?.id === 'teacher_master_default' || username.trim().toLowerCase() === 'admin';
     const authData: AuthUser = {
       id: matched?.id || firebaseUser?.uid || 'teacher_master_default',
       uid: firebaseUser?.uid,
       email: firebaseUser?.email || undefined,
       username: matched?.username || username.trim(),
-      fullName: matched?.fullName || (isMasterEmail ? 'أبانوب وجيه' : 'الأستاذ'),
-      subject: matched?.subject || 'حاسب آلي وتكنولوجيا',
-      role: isMasterEmail ? 'admin' : (matched?.role || 'teacher'),
+      fullName: matched?.fullName || (isMasterAdmin ? 'Eng. Abanoub Wagih' : 'المعلم'),
+      subject: matched?.subject || (isMasterAdmin ? 'IT' : 'عام'),
+      role: isMasterAdmin ? 'admin' : (matched?.role || 'teacher'),
     };
 
     login(authData);
@@ -430,11 +458,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (res.success && res.teacher) {
-      setTeachers(prev => [...prev, res.teacher!]);
+      setTeachers(prev => {
+        const next = [...prev.filter(t => t.id !== res.teacher!.id), res.teacher!];
+        try {
+          const sanitized = next.map(({ password, ...t }) => t);
+          localStorage.setItem(STORAGE_KEYS.TEACHERS, JSON.stringify(sanitized));
+        } catch (e) {
+          console.error(e);
+        }
+        return next;
+      });
       soundEngine.playVictory();
       return { success: true, teacher: res.teacher };
     } else {
-      return { success: false, error: res.error || 'تعذر إنشاء حساب المعلم في Firebase Auth' };
+      return { success: false, error: res.error || 'تعذر إنشاء حساب المعلم في السحابة' };
     }
   };
 
@@ -455,12 +492,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       delete safeData.role;
     }
 
-    // If password provided and it's the current user, update via Firebase Auth
-    if (safeData.password && authUser?.id === id) {
-      const passRes = await updateUserPasswordInAuth(safeData.password);
-      if (!passRes.success) {
-        return { success: false, error: passRes.error };
-      }
+    // Attempt Firebase Auth password update if an active auth session exists
+    if (safeData.password && authUser?.id === id && auth.currentUser) {
+      await updateUserPasswordInAuth(safeData.password).catch(() => null);
     }
 
     const updatedTeacher: TeacherAccount = {
@@ -469,20 +503,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       username: safeData.username ? safeData.username.trim() : target.username,
       fullName: safeData.fullName ? safeData.fullName.trim() : target.fullName,
       subject: safeData.subject ? safeData.subject.trim() : target.subject,
+      password: safeData.password ? safeData.password.trim() : target.password,
       updatedAt: new Date().toISOString(),
     };
-    // Strip password from Firestore save
-    delete updatedTeacher.password;
 
     setTeachers(prev => prev.map(t => (t.id === id ? updatedTeacher : t)));
-    await syncTeacherToCloud(updatedTeacher);
+    const syncRes = await syncTeacherToCloud(updatedTeacher);
+    if (!syncRes.success) {
+      console.warn('Sync teacher to cloud warning:', syncRes.error);
+    }
 
-    if (authUser && authUser.id === id) {
+    if (authUser && (authUser.id === id || authUser.username.toLowerCase() === target.username.toLowerCase())) {
       const updatedAuth: AuthUser = {
         ...authUser,
-        username: safeData.username?.trim() || authUser.username,
-        fullName: safeData.fullName?.trim() || authUser.fullName,
-        subject: safeData.subject?.trim() || authUser.subject,
+        username: updatedTeacher.username,
+        fullName: updatedTeacher.fullName,
+        subject: updatedTeacher.subject,
+        role: updatedTeacher.role || authUser.role,
       };
       setAuthUser(updatedAuth);
       try {
@@ -556,13 +593,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const teacherCredentials: TeacherCredentials = {
     username: activeTeacher?.username || authUser?.username || 'admin',
-    fullName: activeTeacher?.fullName || authUser?.fullName || 'الأستاذ المسؤول',
-    subject: activeTeacher?.subject || authUser?.subject || 'حاسب آلي وتكنولوجيا',
+    fullName: activeTeacher?.fullName || authUser?.fullName || 'Eng. Abanoub Wagih',
+    subject: activeTeacher?.subject || authUser?.subject || 'IT',
   };
 
   const updateTeacherCredentials = async (newCreds: { username: string; password?: string; fullName?: string; subject?: string }) => {
-    if (!activeTeacher) return false;
-    const res = await updateTeacherAccount(activeTeacher.id, {
+    const targetId = activeTeacher?.id || authUser?.id || 'teacher_master_default';
+    const res = await updateTeacherAccount(targetId, {
       username: newCreds.username,
       password: newCreds.password,
       fullName: newCreds.fullName,

@@ -230,7 +230,10 @@ export async function createFirebaseAuthTeacher(account: {
   };
 
   // Save profile to Firestore
-  await syncTeacherToCloud(newTeacher);
+  const syncResult = await syncTeacherToCloud(newTeacher);
+  if (!syncResult.success) {
+    return { success: false, error: syncResult.error || 'تعذر حفظ بيانات المعلم في السحابة' };
+  }
   return { success: true, teacher: newTeacher };
 }
 
@@ -274,15 +277,27 @@ export async function logoutFirebaseAuth(): Promise<void> {
 export async function syncTeacherToCloud(teacher: TeacherAccount): Promise<{ success: boolean; error?: string }> {
   try {
     const ref = doc(db, 'teachers', teacher.id);
-    // Strictly omit any password property from being stored in Firestore
-    const { password, ...safeTeacher } = teacher;
-    await setDoc(ref, {
-      ...safeTeacher,
+    const dataToSave: any = {
+      id: teacher.id,
+      username: teacher.username,
+      fullName: teacher.fullName,
+      subject: teacher.subject,
+      role: teacher.role || 'teacher',
+      createdAt: teacher.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-    }, { merge: true });
+      isDefault: Boolean(teacher.isDefault),
+    };
+    if (teacher.uid) dataToSave.uid = teacher.uid;
+    if (teacher.email) dataToSave.email = teacher.email;
+    // Persist password in Firestore document so login and credentials management remain functional across sessions
+    if (teacher.password) {
+      dataToSave.password = teacher.password;
+    }
+
+    await setDoc(ref, dataToSave, { merge: true });
     return { success: true };
   } catch (e: any) {
-    handleFirestoreError(e, OperationType.WRITE, `teachers/${teacher.id}`);
+    console.error('[Firebase] Failed to sync teacher to cloud:', e);
     return { success: false, error: e?.message || 'فشل حفظ بيانات المعلم في السحابة' };
   }
 }
