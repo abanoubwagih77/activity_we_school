@@ -735,21 +735,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (typeof input === 'string') {
       newClass = {
         id: 'cls-' + Date.now(),
-        name: input,
-        description,
+        name: input.trim(),
         students: [],
         createdAt: new Date().toISOString(),
       };
+      if (description?.trim()) {
+        newClass.description = description.trim();
+      }
     } else {
       newClass = {
         id: 'cls-' + Date.now(),
-        name: input.name || 'فصل دراسي جديد',
-        grade: input.grade,
-        subject: input.subject || activeTeacher?.subject,
-        description: input.description,
+        name: (input.name || 'فصل دراسي جديد').trim(),
         students: input.students || [],
         createdAt: new Date().toISOString(),
       };
+      if (input.grade?.trim()) newClass.grade = input.grade.trim();
+      if (input.subject?.trim() || activeTeacher?.subject) {
+        newClass.subject = (input.subject || activeTeacher?.subject || '').trim();
+      }
+      if (input.description?.trim()) newClass.description = input.description.trim();
     }
     const updated = [newClass, ...classes];
     setClasses(updated);
@@ -776,7 +780,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       executeCloudSync(syncClassesToCloud(activeTeacherId, updated), 'فشل مزامنة حذف الفصل في السحابة');
     }
     setActivities(prev => {
-      const updatedActs = prev.map(act => (act.classId === id ? { ...act, classId: undefined } : act));
+      const updatedActs = prev.map(act => {
+        if (act.classId === id) {
+          const { classId, ...rest } = act;
+          return rest;
+        }
+        return act;
+      });
       if (activeTeacherId) {
         executeCloudSync(syncActivitiesToCloud(activeTeacherId, updatedActs), 'فشل مزامنة تحديث الأنشطة في السحابة');
       }

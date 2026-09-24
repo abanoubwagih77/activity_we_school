@@ -93,17 +93,27 @@ export async function testFirebaseConnection(): Promise<boolean> {
 }
 
 /**
+ * Recursively cleans any object or array to strip 'undefined' properties,
+ * ensuring Firestore setDoc() never errors on unsupported undefined values.
+ */
+export function sanitizeForFirestore<T>(data: T): T {
+  if (data === undefined) return null as unknown as T;
+  if (data === null || typeof data !== 'object') return data;
+  return JSON.parse(JSON.stringify(data));
+}
+
+/**
  * Live Cloud Ping Test: Real-time roundtrip test to verify read & write on the actual Firestore DB
  */
 export async function testLiveCloudPing(): Promise<{ success: boolean; latencyMs: number; error?: string }> {
   const startTime = Date.now();
   try {
     const pingDocRef = doc(db, 'system', 'ping_check');
-    await setDoc(pingDocRef, {
+    await setDoc(pingDocRef, sanitizeForFirestore({
       lastPing: new Date().toISOString(),
       timestamp: startTime,
       clientStatus: 'active_online'
-    }, { merge: true });
+    }), { merge: true });
     const snap = await getDocFromServer(pingDocRef);
     const latencyMs = Date.now() - startTime;
     return { success: snap.exists(), latencyMs };
@@ -322,7 +332,7 @@ export async function syncTeacherToCloud(teacher: TeacherAccount): Promise<{ suc
       dataToSave.password = teacher.password;
     }
 
-    await setDoc(ref, dataToSave, { merge: true });
+    await setDoc(ref, sanitizeForFirestore(dataToSave), { merge: true });
     return { success: true };
   } catch (e: any) {
     console.error('[Firebase] Failed to sync teacher to cloud:', e);
@@ -383,10 +393,10 @@ export async function syncQuestionsToCloud(
   if (!teacherId) return { success: false, error: 'معرف المعلم غير محدد' };
   try {
     const docRef = doc(db, 'teachers', teacherId, 'data', 'questions');
-    await setDoc(docRef, { 
+    await setDoc(docRef, sanitizeForFirestore({ 
       items: questions,
       updatedAt: new Date().toISOString() 
-    });
+    }));
     return { success: true };
   } catch (e: any) {
     handleFirestoreError(e, OperationType.WRITE, `teachers/${teacherId}/data/questions`);
@@ -421,10 +431,10 @@ export async function syncClassesToCloud(
   if (!teacherId) return { success: false, error: 'معرف المعلم غير محدد' };
   try {
     const docRef = doc(db, 'teachers', teacherId, 'data', 'classes');
-    await setDoc(docRef, { 
+    await setDoc(docRef, sanitizeForFirestore({ 
       items: classes,
       updatedAt: new Date().toISOString() 
-    });
+    }));
     return { success: true };
   } catch (e: any) {
     handleFirestoreError(e, OperationType.WRITE, `teachers/${teacherId}/data/classes`);
@@ -459,10 +469,10 @@ export async function syncActivitiesToCloud(
   if (!teacherId) return { success: false, error: 'معرف المعلم غير محدد' };
   try {
     const docRef = doc(db, 'teachers', teacherId, 'data', 'activities');
-    await setDoc(docRef, { 
+    await setDoc(docRef, sanitizeForFirestore({ 
       items: activities,
       updatedAt: new Date().toISOString() 
-    });
+    }));
     return { success: true };
   } catch (e: any) {
     handleFirestoreError(e, OperationType.WRITE, `teachers/${teacherId}/data/activities`);
@@ -493,10 +503,10 @@ export async function syncHistoryToCloud(teacherId: string, history: ActivitySes
   if (!teacherId) return { success: false, error: 'معرف المعلم غير محدد' };
   try {
     const docRef = doc(db, 'teachers', teacherId, 'data', 'history');
-    await setDoc(docRef, { 
+    await setDoc(docRef, sanitizeForFirestore({ 
       items: history,
       updatedAt: new Date().toISOString() 
-    });
+    }));
     return { success: true };
   } catch (e: any) {
     handleFirestoreError(e, OperationType.WRITE, `teachers/${teacherId}/data/history`);
@@ -527,10 +537,10 @@ export async function syncSettingsToCloud(teacherId: string, settings: AppSettin
   if (!teacherId) return { success: false, error: 'معرف المعلم غير محدد' };
   try {
     const docRef = doc(db, 'teachers', teacherId, 'data', 'settings');
-    await setDoc(docRef, { 
+    await setDoc(docRef, sanitizeForFirestore({ 
       ...settings,
       updatedAt: new Date().toISOString() 
-    });
+    }));
     return { success: true };
   } catch (e: any) {
     handleFirestoreError(e, OperationType.WRITE, `teachers/${teacherId}/data/settings`);
