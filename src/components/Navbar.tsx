@@ -32,13 +32,13 @@ export const Navbar: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const navItems: { id: ViewMode; label: string; icon: React.ReactNode }[] = [
-    { id: 'dashboard', label: 'الرئيسية', icon: <LayoutDashboard className="w-4 h-4" /> },
-    { id: 'activities', label: 'الأنشطة الصفية', icon: <Gamepad2 className="w-4 h-4" /> },
-    { id: 'question_bank', label: 'بنك الأسئلة', icon: <Database className="w-4 h-4" /> },
-    { id: 'classes', label: 'الفصول والطلاب', icon: <Users className="w-4 h-4" /> },
-    { id: 'history', label: 'سجل الأداء', icon: <History className="w-4 h-4" /> },
-    { id: 'settings', label: 'الإعدادات والمعلمين', icon: <Settings className="w-4 h-4" /> },
+  const navItems: { id: ViewMode; label: string; fullLabel?: string; icon: React.ReactNode }[] = [
+    { id: 'dashboard', label: 'الرئيسية', fullLabel: 'الصفحة الرئيسية', icon: <LayoutDashboard className="w-4 h-4" /> },
+    { id: 'activities', label: 'الأنشطة', fullLabel: 'الأنشطة والمسابقات الصفية', icon: <Gamepad2 className="w-4 h-4" /> },
+    { id: 'question_bank', label: 'بنك الأسئلة', fullLabel: 'بنك الأسئلة الشامل', icon: <Database className="w-4 h-4" /> },
+    { id: 'classes', label: 'الفصول', fullLabel: 'الفصول والطلاب', icon: <Users className="w-4 h-4" /> },
+    { id: 'history', label: 'السجل', fullLabel: 'سجل الأداء والتقارير', icon: <History className="w-4 h-4" /> },
+    { id: 'settings', label: 'الإعدادات', fullLabel: 'إعدادات المنصة والمعلمين', icon: <Settings className="w-4 h-4" /> },
   ];
 
   const toggleSound = () => {
@@ -79,10 +79,10 @@ export const Navbar: React.FC = () => {
       className="sticky top-0 z-30 w-full bg-white/95 dark:bg-slate-900/95 border-b border-slate-200 dark:border-slate-800 shadow-xs backdrop-blur-md transition-colors duration-200" 
       dir="rtl"
     >
-      {/* Main Top Bar */}
-      <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3 sm:gap-4">
+      {/* Main Top Bar: Perfectly centered 3-column layout */}
+      <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2 sm:gap-4">
         
-        {/* Right Column (in RTL): WE Brand Logo - Pinned firmly to the right */}
+        {/* Right Column (in RTL): WE Brand Logo */}
         <div className="flex items-center shrink-0">
           <button
             onClick={() => handleNavClick('dashboard')}
@@ -93,33 +93,35 @@ export const Navbar: React.FC = () => {
           </button>
         </div>
 
-        {/* Center Column: Navigation Links (Desktop only, 1280px+) */}
-        <nav className="hidden xl:flex items-center gap-1 bg-slate-100/90 dark:bg-slate-800/90 p-1.5 rounded-2xl border border-slate-200/80 dark:border-slate-700/80 shadow-xs shrink-0">
-          {navItems.map(item => {
-            const isActive = view === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => handleNavClick(item.id)}
-                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
-                  isActive
-                    ? 'bg-[#5B2D82] text-white shadow-sm shadow-[#5B2D82]/25'
-                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-white dark:hover:bg-slate-700'
-                }`}
-              >
-                {item.icon}
-                <span className="whitespace-nowrap">{item.label}</span>
-              </button>
-            );
-          })}
-        </nav>
+        {/* Center Column: Navigation Links (Desktop only, 1280px+) - Shifted comfortably towards the right */}
+        <div className="hidden xl:flex items-center justify-center shrink-0 ml-6 2xl:ml-10">
+          <nav className="flex items-center gap-1 bg-slate-100/90 dark:bg-slate-800/90 p-1 rounded-2xl border border-slate-200/80 dark:border-slate-700/80 shadow-xs">
+            {navItems.map(item => {
+              const isActive = view === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => handleNavClick(item.id)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs transition-all cursor-pointer shrink-0 ${
+                    isActive
+                      ? 'bg-[#5B2D82] text-white shadow-xs font-bold'
+                      : 'font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-white dark:hover:bg-slate-700'
+                  }`}
+                >
+                  {item.icon}
+                  <span className="whitespace-nowrap">{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        </div>
 
         {/* Left Column (in RTL): User, Quick Actions & Mobile Toggle */}
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        <div className="flex items-center justify-end gap-1.5 sm:gap-2 shrink-0">
           {/* Quick Theme Toggle (Light / Dark) */}
           <button
             onClick={toggleTheme}
-            className="w-10 h-10 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white border border-slate-200 dark:border-slate-700 cursor-pointer transition-all flex items-center justify-center shrink-0"
+            className="w-9 h-9 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white border border-slate-200 dark:border-slate-700 cursor-pointer transition-all flex items-center justify-center shrink-0"
             title={settings.theme === 'dark' ? 'التحويل للوضع الفاتح' : 'التحويل للوضع الداكن'}
           >
             {settings.theme === 'dark' ? (
@@ -132,7 +134,7 @@ export const Navbar: React.FC = () => {
           {/* Quick Audio Toggle - hidden on mobile to prevent crowding */}
           <button
             onClick={toggleSound}
-            className="hidden md:flex w-10 h-10 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white border border-slate-200 dark:border-slate-700 cursor-pointer transition-all items-center justify-center shrink-0"
+            className="hidden md:flex w-9 h-9 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white border border-slate-200 dark:border-slate-700 cursor-pointer transition-all items-center justify-center shrink-0"
             title={settings.soundEnabled ? 'كتم المؤثرات الصوتية' : 'تشغيل المؤثرات الصوتية'}
           >
             {settings.soundEnabled ? (
@@ -142,28 +144,17 @@ export const Navbar: React.FC = () => {
             )}
           </button>
 
-          {/* Quick Launch CTA - Visible only on ultra-wide screens */}
-          {activities.length > 0 && (
-            <button
-              onClick={handleQuickLaunch}
-              className="hidden 2xl:flex items-center gap-2 px-3.5 h-10 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm shadow-emerald-600/20 cursor-pointer transition-all shrink-0"
-            >
-              <Play className="w-3.5 h-3.5 fill-white" />
-              <span>عرض النشاط</span>
-            </button>
-          )}
-
           {/* Current Teacher & Quick Switcher Dropdown */}
           <div className="relative shrink-0 flex items-center">
             <button
               onClick={() => setShowTeacherMenu(!showTeacherMenu)}
-              className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 h-10 rounded-xl bg-purple-50 hover:bg-purple-100/80 dark:bg-purple-950/40 dark:hover:bg-purple-900/60 border border-purple-200 dark:border-purple-800/60 cursor-pointer transition-all shrink-0"
+              className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-2.5 h-9 rounded-xl bg-purple-50 hover:bg-purple-100/80 dark:bg-purple-950/40 dark:hover:bg-purple-900/60 border border-purple-200 dark:border-purple-800/60 cursor-pointer transition-all shrink-0"
               title="بيانات المعلم الحالي وتبديل الحساب"
             >
               <div className="w-6 h-6 rounded-lg bg-[#5B2D82] text-white flex items-center justify-center font-bold text-xs shrink-0">
                 <UserCheck className="w-3.5 h-3.5" />
               </div>
-              <div className="text-right hidden sm:block max-w-[90px] md:max-w-[130px] truncate">
+              <div className="text-right hidden sm:block max-w-[85px] md:max-w-[120px] truncate">
                 <div className="text-xs font-bold text-slate-900 dark:text-white leading-tight truncate">
                   {authUser?.fullName || 'المعلم'}
                 </div>
@@ -274,10 +265,10 @@ export const Navbar: React.FC = () => {
           {/* Logout Button: Visible on tablet/desktop, compact icon on md, labeled on xl */}
           <button
             onClick={handleLogout}
-            className="hidden md:flex items-center gap-1.5 px-2.5 xl:px-3 h-10 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800/60 font-bold text-xs cursor-pointer transition-colors shrink-0"
+            className="hidden md:flex items-center gap-1.5 px-2.5 h-9 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800/60 font-bold text-xs cursor-pointer transition-colors shrink-0"
             title="تسجيل الخروج"
           >
-            <LogOut className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+            <LogOut className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
             <span className="hidden xl:inline">خروج</span>
           </button>
 
@@ -288,14 +279,14 @@ export const Navbar: React.FC = () => {
               soundEngine.playClick();
               setIsMobileMenuOpen(!isMobileMenuOpen);
             }}
-            className="xl:hidden w-10 h-10 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 cursor-pointer transition-all flex items-center justify-center shrink-0 focus:outline-none"
+            className="xl:hidden w-9 h-9 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 cursor-pointer transition-all flex items-center justify-center shrink-0 focus:outline-none"
             aria-label={isMobileMenuOpen ? 'إغلاق القائمة' : 'فتح القائمة الرئيسية'}
             title={isMobileMenuOpen ? 'إغلاق القائمة' : 'القائمة الرئيسية'}
           >
             {isMobileMenuOpen ? (
-              <X className="w-5 h-5 text-[#5B2D82] dark:text-purple-400" />
+              <X className="w-4 h-4 text-[#5B2D82] dark:text-purple-400" />
             ) : (
-              <Menu className="w-5 h-5 text-slate-700 dark:text-slate-200" />
+              <Menu className="w-4 h-4 text-slate-700 dark:text-slate-200" />
             )}
           </button>
         </div>
@@ -354,7 +345,7 @@ export const Navbar: React.FC = () => {
                     }`}>
                       {item.icon}
                     </div>
-                    <span className="text-sm font-bold">{item.label}</span>
+                    <span className="text-sm font-bold">{item.fullLabel || item.label}</span>
                   </div>
                   {isActive ? (
                     <span className="text-xs bg-white/25 text-white px-2.5 py-0.5 rounded-lg font-bold">نشط</span>
